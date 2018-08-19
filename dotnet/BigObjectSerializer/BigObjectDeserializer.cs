@@ -1,6 +1,10 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,6 +23,36 @@ namespace BigObjectSerializer
         private double[] _doubleBuffer = new[] { 0.0 };
         private ulong[] _ulongBuffer = new[] { 0UL };
 
+        // Reflection
+        private static readonly IImmutableDictionary<Type, MethodInfo> _basicTypePopMethods; // Types that directly map to basic Pop Methods (such as PopIntAsync)
+        private static readonly IImmutableSet<Type> _popValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
+
+        static BigObjectDeserializer()
+        {
+            var popMethods = new Dictionary<Type, MethodInfo>
+            {
+                [typeof(int)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopIntAsync)),
+                [typeof(uint)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopUnsignedIntAsync)),
+                [typeof(short)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopShortAsync)),
+                [typeof(ushort)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopUnsignedShortAsync)),
+                [typeof(long)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopLongAsync)),
+                [typeof(ulong)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopUnsignedLongAsync)),
+                [typeof(byte)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopByteAsync)),
+                [typeof(bool)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopBoolAsync)),
+                [typeof(float)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopFloatAsync)),
+                [typeof(double)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopDoubleAsync)),
+                [typeof(string)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopStringAsync))
+            };
+            _basicTypePopMethods = popMethods.ToImmutableDictionary();
+
+            var popValueTypes = popMethods.Select(kv => kv.Key).ToList();
+            popValueTypes.Add(typeof(ISet<>));
+            popValueTypes.Add(typeof(IDictionary<,>));
+            popValueTypes.Add(typeof(IList<>));
+            popValueTypes.Add(typeof(IEnumerable<>));
+            _popValueTypes = popValueTypes.ToImmutableHashSet();
+        }
+        
         public BigObjectDeserializer(Func<byte[], int, CancellationToken, Task> readFunc)
         {
             _readFunc = readFunc;
@@ -116,6 +150,141 @@ namespace BigObjectSerializer
             return _doubleBuffer[0];
         }
 
+        #endregion
+
+        #region Reflective Pop
+
+        public Task<T> PopObjectAsync<T>(int maxDepth = 10) where T : new()
+            => PopObjectAsync(typeof(T), 1, maxDepth).ContinueWith(t => (T)t.Result);
+
+        public Task<object> PopObjectAsync(Type type, int maxDepth = 10)
+            => PopObjectAsync(type, 1, maxDepth);
+
+        private async Task<object> PopObjectAsync(Type type, int depth, int maxDepth)
+        {
+            if (depth > maxDepth) return null; // Ignore properties past max depth
+
+            // Null check
+            if (type.IsClass)
+            {
+                if (await PopByteAsync() == 0x0)
+                {
+                    return null;
+                }
+            }
+
+            var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance).ToList();
+
+            var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
+            if (_popValueTypes.Contains(typeWithoutGenerics))
+            {
+                // Raw value to push
+                return await PopValueAsync(type, depth + 1, maxDepth);
+            }
+            
+            // Create and populate object
+            var result = Activator.CreateInstance(type);
+            var propertiesToSet = properties.Where(p => p.CanRead && p.CanWrite); // For now we only consider properties with getter/setter
+
+            if (await PopStringAsync() != "__BOS_S") throw new ArgumentException("Expected start of object.");
+
+            while (true)
+            {
+                var propertyName = await PopStringAsync();
+                if (propertyName == "__BOS_E") break; // End of object
+
+                var matchingProperty = propertiesToSet.FirstOrDefault(p => p.Name == propertyName);
+                if (matchingProperty == default)
+                {
+                    // We don't know how many values to pop, so we can't determine how to skip
+                    throw new ArgumentException($"Property name {propertyName} not found in type but is expected.");
+                }
+             
+                var propertyType = matchingProperty.PropertyType;
+
+                var propertyHasValue = await PopByteAsync() == 0x01;
+
+                if (!propertyHasValue) continue; // Ignore null values
+                
+                var propertyValue = await PopValueAsync(propertyType, depth + 1, maxDepth);
+                matchingProperty.SetValue(result, propertyValue);
+            }
+
+            return result;
+        }
+
+        private async Task<object> PopValueAsync(Type type, int depth, int maxDepth)
+        {
+            var (success, result) = await TryPopBasicTypeAsync(type);
+            if (success)
+            {
+                // Property was basic supported type and was pushed
+                return result;
+            }
+            else if (type.IsArray || typeof(IEnumerable).IsAssignableFrom(type))
+            {
+                // For collections, we can just store the values and let the deserializer figure out what container to put them inside
+                var genericType = Utilities.GetElementType(type);
+                var length = await PopIntAsync();
+                var entries = new List<object>();
+                for (var i = 0; i < length; ++i)
+                {
+                    var value = await PopObjectAsync(genericType, depth + 1, maxDepth);
+                    entries.Add(value);
+                }
+                
+                if (Utilities.IsAssignableToGenericType(type, typeof(IDictionary<,>)))
+                {
+                    var genericArguments = genericType.GetGenericArguments();
+                    var genericType1 = genericArguments[0];
+                    var genericType2 = genericArguments[1];
+                    var dictionaryGenericType = typeof(Dictionary<,>).MakeGenericType(genericType1, genericType2);
+                    return Utilities.CreateFromEnumerableConstructor(dictionaryGenericType, genericType, entries);
+                }
+                else if (type.IsArray)
+                {
+                    return Utilities.ConvertToArray(entries, genericType);
+                }
+                else if (Utilities.IsAssignableToGenericType(type, typeof(ISet<>)))
+                {
+                    var hashSetGenericType = typeof(HashSet<>).MakeGenericType(genericType);
+                    return Utilities.CreateFromEnumerableConstructor(hashSetGenericType, genericType, entries);
+                }
+                else if (Utilities.IsAssignableToGenericType(type, typeof(IList<>)))
+                {
+                    return Utilities.ConvertToList(entries, genericType);
+                }
+                else if (Utilities.IsAssignableToGenericType(type, typeof(IEnumerable<>)))
+                {
+                    return Utilities.ConvertTo(entries, genericType);
+                }
+                else
+                {
+                    throw new NotImplementedException($"{nameof(PopObjectAsync)} does not support deserializing type of {type.FullName}");
+                }
+            }
+            else if (type.IsClass) // TODO: Handle structs
+            {
+                return await PopObjectAsync(type, depth + 1, maxDepth);
+            }
+            else
+            {
+                throw new NotImplementedException($"{nameof(PopObjectAsync)} does not support deserializing type of {type.FullName}");
+            }
+        }
+
+        private async Task<(bool Success, object Result)> TryPopBasicTypeAsync(Type type)
+        {
+            if (_basicTypePopMethods.ContainsKey(type))
+            {
+                var task = (Task)_basicTypePopMethods[type].Invoke(this, new object[0]);
+                await task;
+                var resultProperty = typeof(Task<>).MakeGenericType(type).GetProperty(nameof(Task<object>.Result));
+                return (true, resultProperty.GetValue(task));
+            }
+            return (false, null);
+        }
+        
         #endregion
 
         public void Dispose()

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -94,6 +95,7 @@ namespace BigObjectSerializer.Test
 
             var basicPoco = new BasicPoco()
             {
+                NullStringValue = null,
                 IntValues = new List<int>() { 56, 57, 58 },
                 IntValue = 238,
                 UintValue = 543,
@@ -122,8 +124,22 @@ namespace BigObjectSerializer.Test
             using (var stream = new MemoryStream(serializedStream))
             using (var deserializer = new BigObjectDeserializer(stream))
             {
-                throw new NotImplementedException();
-                //var objectVal = await deserializer.PopObjectAsync<BasicPoco>();
+                var deserializedBasicPoco = await deserializer.PopObjectAsync<BasicPoco>();
+
+                Assert.Equal(basicPoco.NullStringValue, deserializedBasicPoco.NullStringValue);
+                Assert.True(basicPoco.IntValues.SequenceEqual(deserializedBasicPoco.IntValues));
+                Assert.Equal(basicPoco.IntValue, deserializedBasicPoco.IntValue);
+                Assert.Equal(basicPoco.UintValue, deserializedBasicPoco.UintValue);
+                Assert.Equal(basicPoco.ShortValue, deserializedBasicPoco.ShortValue);
+                Assert.Equal(basicPoco.UShortValue, deserializedBasicPoco.UShortValue);
+                Assert.Equal(basicPoco.LongValue, deserializedBasicPoco.LongValue);
+                Assert.Equal(basicPoco.ULongValue, deserializedBasicPoco.ULongValue);
+                Assert.Equal(basicPoco.ByteValue, deserializedBasicPoco.ByteValue);
+                Assert.Equal(basicPoco.FloatValue, deserializedBasicPoco.FloatValue);
+                Assert.Equal(basicPoco.DoubleValue, deserializedBasicPoco.DoubleValue);
+                Assert.Equal(basicPoco.StringValue, deserializedBasicPoco.StringValue);
+                Assert.True(basicPoco.StringValues.SequenceEqual(deserializedBasicPoco.StringValues));
+                Assert.True(basicPoco.DoubleValues.SequenceEqual(deserializedBasicPoco.DoubleValues));
             }
         }
     }

@@ -6,6 +6,7 @@ namespace BigObjectSerializer.Test
 {
     public class BasicPoco
     {
+        public string NullStringValue { get; set; }
         public IEnumerable<int> IntValues { get; set; }
         public int IntValue { get; set; }
         public uint UintValue { get; set; }

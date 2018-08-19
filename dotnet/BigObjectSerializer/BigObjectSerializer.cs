@@ -31,7 +31,8 @@ namespace BigObjectSerializer
 
         // Reflection
         private static readonly IImmutableDictionary<Type, MethodInfo> _basicTypePushMethods;
-        
+        private static readonly IImmutableSet<Type> _pushValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
+
         static BigObjectSerializer()
         {
             var pushMethods = new Dictionary<Type, MethodInfo>
@@ -49,6 +50,13 @@ namespace BigObjectSerializer
                 [typeof(string)] = typeof(BigObjectSerializer).GetMethod(nameof(PushStringAsync))
             };
             _basicTypePushMethods = pushMethods.ToImmutableDictionary();
+
+            var pushValueTypes = pushMethods.Select(kv => kv.Key).ToList();
+            pushValueTypes.Add(typeof(ISet<>));
+            pushValueTypes.Add(typeof(IDictionary<,>));
+            pushValueTypes.Add(typeof(IList<>));
+            pushValueTypes.Add(typeof(IEnumerable<>));
+            _pushValueTypes = pushValueTypes.ToImmutableHashSet();
         }
 
         public BigObjectSerializer(Func<ReadOnlyMemory<byte>, CancellationToken, Task> writeFunc, int bufferSize = 1000000)
@@ -211,40 +219,70 @@ namespace BigObjectSerializer
             await WriteAndFlushIfRequireAsync((ulong)_ulongBuffer[0], sizeof(double)).ConfigureAwait(false);
         }
 
+        #endregion
+
         #region Reflective Push
 
         public Task PushObjectAsync<T>(T value, int maxDepth = 10) where T : new()
             => PushObjectAsync(value, typeof(T), 1, maxDepth);
 
+        public Task PushObjectAsync(object value, Type type, int maxDepth = 10)
+            => PushObjectAsync(value, type, 1, maxDepth);
+
         private async Task PushObjectAsync(object value, Type type, int depth, int maxDepth)
         {
             if (depth > maxDepth) return; // Ignore properties past max depth
 
+            // Null check
+            if (type.IsClass)
+            {
+                if (value is null)
+                {
+                    await PushByteAsync(0x0);
+                }
+                else
+                {
+                    await PushByteAsync(0x1);
+                }
+            }
+
             var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance).ToList();
 
-            if (properties.Count() == 0)
+            var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
+            if (_pushValueTypes.Contains(typeWithoutGenerics)) // Might be better to instead check if it's one of the types directly serializable
             {
                 // Raw value to push
                 await PushValueAsync(value, type, depth + 1, maxDepth);
                 return;
             }
 
+            await PushStringAsync("__BOS_S");
             foreach (var property in properties.Where(p => p.CanRead && p.CanWrite)) // For now we only consider properties with getter/setter
             {
                 var propertyType = property.PropertyType;
                 var name = property.Name;
                 var propertyValue = property.GetValue(value);
-                
-                if (propertyValue == null) continue; // Null values can be ignored since the deserializer will also leave the property null NOTE: This leaves a bug where default values are not overwritten with a null value
 
                 await PushStringAsync(name); // Property name is pushed first to help deserialization handle extra or out of order properties changed after serialization
+
+                if (propertyValue == null)
+                {
+                    // Null values are marked with byte value 0x00 and skipped
+                    await PushByteAsync(0x0);
+                    continue;
+                }
+                else
+                {
+                    await PushByteAsync(0x1);
+                }
                 await PushValueAsync(propertyValue, propertyType, depth + 1, maxDepth);
             }
+            await PushStringAsync("__BOS_E");
         }
 
         private async Task PushValueAsync(object value, Type type, int depth, int maxDepth)
         {
-            if (await PushBasicTypeAsync(value, type))
+            if (await TryPushBasicTypeAsync(value, type))
             {
                 // Property was basic supported type and was pushed
                 return;
@@ -252,7 +290,7 @@ namespace BigObjectSerializer
             else if (type.IsArray || typeof(IEnumerable).IsAssignableFrom(type))
             {
                 // For collections, we can just store the values and let the deserializer figure out what container to put them inside
-                var genericType = GetElementType(type);
+                var genericType = Utilities.GetElementType(type);
                 var enumerable = ((IEnumerable)value).OfType<object>();
 
                 await PushIntAsync(enumerable.Count()); // Store the length of the enumerable
@@ -277,9 +315,8 @@ namespace BigObjectSerializer
         /// <typeparam name="T"></typeparam>
         /// <param name="value"></param>
         /// <returns>True if value was a basic type pushed.</returns>
-        private async Task<bool> PushBasicTypeAsync(object value, Type type)
+        private async Task<bool> TryPushBasicTypeAsync(object value, Type type)
         {
-            // TODO: Use reflection method invoke for this
             if (_basicTypePushMethods.ContainsKey(type))
             {
                 await (Task)_basicTypePushMethods[type].Invoke(this, new[] { value });
@@ -287,28 +324,6 @@ namespace BigObjectSerializer
             }
             return false;
         }
-        
-        private static Type GetElementType(Type type)
-        {
-            // Source: https://stackoverflow.com/questions/906499/getting-type-t-from-ienumerablet
-            // Type is Array
-            // short-circuit if you expect lots of arrays 
-            if (type.IsArray)
-                return type.GetElementType();
-
-            // type is IEnumerable<T>;
-            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>))
-                return type.GetGenericArguments()[0];
-
-            // type implements/extends IEnumerable<T>;
-            var enumType = type.GetInterfaces()
-                                    .Where(t => t.IsGenericType &&
-                                           t.GetGenericTypeDefinition() == typeof(IEnumerable<>))
-                                    .Select(t => t.GenericTypeArguments[0]).FirstOrDefault();
-            return enumType ?? type;
-        }
-
-        #endregion
 
         #endregion
 
@@ -316,4 +331,6 @@ namespace BigObjectSerializer
         {
         }
     }
+
+    // TODO: Add object type serializer (for PushObject, instead of calling the internal serializer, calls the callback instead)
 }
