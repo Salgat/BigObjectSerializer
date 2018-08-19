@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Xunit;
@@ -83,6 +84,46 @@ namespace BigObjectSerializer.Test
                 Assert.Equal(ulongToPush, ulongVal);
                 Assert.Equal(floatToPush, floatVal);
                 Assert.Equal(doubleToPush, doubleVal);
+            }
+        }
+
+        [Fact]
+        public async Task BasicReflectiveSerialization()
+        {
+            byte[] serializedStream;
+
+            var basicPoco = new BasicPoco()
+            {
+                IntValues = new List<int>() { 56, 57, 58 },
+                IntValue = 238,
+                UintValue = 543,
+                ShortValue = 12,
+                UShortValue = 42,
+                LongValue = 400002340000000L,
+                ULongValue = 600000964000000UL,
+                ByteValue = 0xF3,
+                BoolValue = true,
+                FloatValue = 921523.129521f,
+                DoubleValue = 192510921421.012351298d,
+                StringValue = "testString",
+                StringValues = new List<string>() { "first", "second", "third"},
+                DoubleValues = new [] { 24521.523d, 12451251.9957d }
+            };
+
+            using (var stream = new MemoryStream())
+            using (var serializer = new BigObjectSerializer(stream))
+            {
+                await serializer.PushObjectAsync(basicPoco);
+                await serializer.FlushAsync();
+
+                serializedStream = stream.ToArray();
+            }
+
+            using (var stream = new MemoryStream(serializedStream))
+            using (var deserializer = new BigObjectDeserializer(stream))
+            {
+                throw new NotImplementedException();
+                //var objectVal = await deserializer.PopObjectAsync<BasicPoco>();
             }
         }
     }
