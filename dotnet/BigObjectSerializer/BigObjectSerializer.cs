@@ -47,7 +47,8 @@ namespace BigObjectSerializer
                 [typeof(bool)] = typeof(BigObjectSerializer).GetMethod(nameof(PushBoolAsync)),
                 [typeof(float)] = typeof(BigObjectSerializer).GetMethod(nameof(PushFloatAsync)),
                 [typeof(double)] = typeof(BigObjectSerializer).GetMethod(nameof(PushDoubleAsync)),
-                [typeof(string)] = typeof(BigObjectSerializer).GetMethod(nameof(PushStringAsync))
+                [typeof(string)] = typeof(BigObjectSerializer).GetMethod(nameof(PushStringAsync)),
+                [typeof(Guid)] = typeof(BigObjectSerializer).GetMethod(nameof(PushGuidAsync))
             };
             _basicTypePushMethods = pushMethods.ToImmutableDictionary();
 
@@ -219,6 +220,9 @@ namespace BigObjectSerializer
             await WriteAndFlushIfRequireAsync((ulong)_ulongBuffer[0], sizeof(double)).ConfigureAwait(false);
         }
 
+        public Task PushGuidAsync(Guid value)
+            => PushStringAsync(value.ToString());
+
         #endregion
 
         #region Reflective Push
@@ -253,6 +257,11 @@ namespace BigObjectSerializer
             {
                 // Raw value to push
                 await PushValueAsync(value, type, depth + 1, maxDepth);
+                return;
+            }
+            else if (typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics))
+            {
+                await PushKeyValuePairAsync(value, type, depth + 1, maxDepth);
                 return;
             }
 
@@ -307,6 +316,17 @@ namespace BigObjectSerializer
             {
                 throw new NotImplementedException($"{nameof(PushObjectAsync)} does not support serializing type of {type.FullName}");
             }
+        }
+
+        private async Task PushKeyValuePairAsync(object value, Type type, int depth, int maxDepth)
+        {
+            // KeyValuePair is pushed as the key then value
+            var properties = type.GetProperties();
+            var kvKey = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Key));
+            var kvValue = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Value));
+
+            await PushObjectAsync(kvKey.GetValue(value), kvKey.PropertyType, depth + 1, maxDepth);
+            await PushObjectAsync(kvValue.GetValue(value), kvValue.PropertyType, depth + 1, maxDepth);
         }
 
         /// <summary>

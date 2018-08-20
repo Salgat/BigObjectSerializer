@@ -35,7 +35,11 @@ namespace BigObjectSerializer
             var enumerableConstructor = genericContainerType.GetConstructors().First(c =>
             {
                 var paramaters = c.GetParameters();
-                return paramaters.Length == 1 && typeof(IEnumerable).IsAssignableFrom(paramaters.First().ParameterType);
+                if (paramaters.Length == 0) return false;
+
+                var parameterType = paramaters.FirstOrDefault().ParameterType;
+                if (parameterType.IsGenericType) parameterType = parameterType.GetGenericTypeDefinition();
+                return paramaters.Length == 1 && !typeof(IDictionary<,>).IsAssignableFrom(parameterType) && typeof(IEnumerable).IsAssignableFrom(parameterType);
             });
             return enumerableConstructor.Invoke(new[] { castEntries });
         }

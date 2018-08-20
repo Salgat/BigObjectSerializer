@@ -142,5 +142,67 @@ namespace BigObjectSerializer.Test
                 Assert.True(basicPoco.DoubleValues.SequenceEqual(deserializedBasicPoco.DoubleValues));
             }
         }
+
+        [Fact]
+        public async Task ReflectiveSerialization()
+        {
+            byte[] serializedStream;
+
+            var poco = new Poco()
+            {
+                StringEnumerableValues = new List<string>() { "first", "second", "third" },
+                IntValue = 682310292,
+                GuidDoubleDictionaryValues = new Dictionary<Guid, double>()
+                {
+                    [Guid.NewGuid()] = 125123904.129512d,
+                    [Guid.NewGuid()] = 9783125.3843209d,
+                    [Guid.NewGuid()] = 4532.123d,
+                    [Guid.NewGuid()] = 821639.12942d
+                },
+                PocoLevel2Values = Enumerable.Range(0, 100).Select(i => new PocoLevel2()
+                {
+                    StringValue = $"{i}_{i * 100}",
+                    GuidValue = Guid.NewGuid(),
+                    IntValues = new HashSet<int>(Enumerable.Range(0, 50).Select(i2 => i2)),
+                    PocoLevel3Value = new PocoLevel3()
+                    {
+                        DoubleValue = 5932.23d,
+                        ByteValues = Enumerable.Range(0, 10).Select(i3 => (byte)i3).ToArray()
+                    }
+                }).ToList(),
+                StringValue = "testValue"
+            };
+
+            using (var stream = new MemoryStream())
+            using (var serializer = new BigObjectSerializer(stream))
+            {
+                await serializer.PushObjectAsync(poco);
+                await serializer.FlushAsync();
+
+                serializedStream = stream.ToArray();
+            }
+
+            using (var stream = new MemoryStream(serializedStream))
+            using (var deserializer = new BigObjectDeserializer(stream))
+            {
+                var deserializedBasicPoco = await deserializer.PopObjectAsync<Poco>();
+
+                Assert.True(poco.StringEnumerableValues.SequenceEqual(deserializedBasicPoco.StringEnumerableValues));
+                Assert.Equal(poco.IntValue, deserializedBasicPoco.IntValue);
+                Assert.Equal(poco.GuidDoubleDictionaryValues.Count, deserializedBasicPoco.GuidDoubleDictionaryValues.Count);
+                Assert.True(poco.GuidDoubleDictionaryValues.All(kv => 
+                    deserializedBasicPoco.GuidDoubleDictionaryValues.ContainsKey(kv.Key) && 
+                    kv.Value == deserializedBasicPoco.GuidDoubleDictionaryValues[kv.Key]));
+                for (var i = 0; i < poco.PocoLevel2Values.Count; ++i)
+                {
+                    Assert.Equal(poco.PocoLevel2Values[i].StringValue, deserializedBasicPoco.PocoLevel2Values[i].StringValue);
+                    Assert.Equal(poco.PocoLevel2Values[i].GuidValue, deserializedBasicPoco.PocoLevel2Values[i].GuidValue);
+                    Assert.True(poco.PocoLevel2Values[i].IntValues.OrderBy(e => e).SequenceEqual(
+                        deserializedBasicPoco.PocoLevel2Values[i].IntValues.OrderBy(e => e)));
+                    Assert.Equal(poco.PocoLevel2Values[i].PocoLevel3Value.DoubleValue, deserializedBasicPoco.PocoLevel2Values[i].PocoLevel3Value.DoubleValue);
+                    Assert.True(poco.PocoLevel2Values[i].PocoLevel3Value.ByteValues.SequenceEqual(deserializedBasicPoco.PocoLevel2Values[i].PocoLevel3Value.ByteValues));
+                }
+            }
+        }
     }
 }

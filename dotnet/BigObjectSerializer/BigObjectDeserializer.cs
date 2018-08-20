@@ -41,7 +41,8 @@ namespace BigObjectSerializer
                 [typeof(bool)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopBoolAsync)),
                 [typeof(float)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopFloatAsync)),
                 [typeof(double)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopDoubleAsync)),
-                [typeof(string)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopStringAsync))
+                [typeof(string)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopStringAsync)),
+                [typeof(Guid)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopGuidAsync))
             };
             _basicTypePopMethods = popMethods.ToImmutableDictionary();
 
@@ -150,6 +151,9 @@ namespace BigObjectSerializer
             return _doubleBuffer[0];
         }
 
+        public Task<Guid> PopGuidAsync()
+            => PopStringAsync().ContinueWith(t => new Guid(t.Result));
+
         #endregion
 
         #region Reflective Pop
@@ -181,7 +185,11 @@ namespace BigObjectSerializer
                 // Raw value to push
                 return await PopValueAsync(type, depth + 1, maxDepth);
             }
-            
+            else if (typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics))
+            {
+                return await PopKeyValuePairAsync(type, depth + 1, maxDepth);
+            }
+
             // Create and populate object
             var result = Activator.CreateInstance(type);
             var propertiesToSet = properties.Where(p => p.CanRead && p.CanWrite); // For now we only consider properties with getter/setter
@@ -271,6 +279,17 @@ namespace BigObjectSerializer
             {
                 throw new NotImplementedException($"{nameof(PopObjectAsync)} does not support deserializing type of {type.FullName}");
             }
+        }
+
+        private async Task<object> PopKeyValuePairAsync(Type type, int depth, int maxDepth)
+        {
+            // KeyValuePair is popped as the key then value
+            var genericParameters = type.GetGenericArguments();
+            var kvKey = await PopObjectAsync(genericParameters[0], depth + 1, maxDepth);
+            var kvValue = await PopObjectAsync(genericParameters[1], depth + 1, maxDepth);
+
+            var constructor = type.GetConstructors().First();
+            return constructor.Invoke(new[] { kvKey, kvValue });
         }
 
         private async Task<(bool Success, object Result)> TryPopBasicTypeAsync(Type type)
