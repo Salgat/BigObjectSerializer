@@ -1,20 +1,29 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace BigObjectSerializer.Test
 {
     public class Benchmarks
     {
+        private readonly ITestOutputHelper _output;
+
+        public Benchmarks(ITestOutputHelper output)
+        {
+            _output = output;
+        }
+        
         public static TheoryData<int> BenchmarkConfigurations
         {
             get
             {
                 var theoryData = new TheoryData<int>();
-                for (var i = 1; i <= 1000; i *= 10)
+                for (var i = 1; i <= 10000; i *= 10)
                 {
                     theoryData.Add(i);
                 }
@@ -22,7 +31,46 @@ namespace BigObjectSerializer.Test
             }
         }
 
-        //[Theory(DisplayName = "Benchmarks"), MemberData(nameof(BenchmarkConfigurations))]
+        [Theory(DisplayName = "Benchmarks"), MemberData(nameof(BenchmarkConfigurations))]
+        public async Task FileSerializationBenchmarks(int count)
+        {
+            var random = new Random(0);
+            var benchmarkPoco = new BenchmarkPoco()
+            {
+                StringValue = "testString",
+                DictionaryValues = Enumerable.Range(0, count).ToDictionary(_ => Guid.NewGuid(), _ => new BenchmarkPoco2()
+                {
+                    IntValue = random.Next(0, int.MaxValue),
+                    StringValue = Guid.NewGuid().ToString(),
+                    GuidValue = Guid.NewGuid()
+                }),
+                DoubleValues = Enumerable.Range(0, count).Select(_ => random.NextDouble() * double.MaxValue).ToList()
+            };
+            BenchmarkPoco deserializedBenchmarkPoco;
+
+            var timer = new Stopwatch();
+            timer.Start();
+            using (var stream = File.Open("test.bin", FileMode.Create))
+            using (var serializer = new BigObjectSerializer(stream))
+            {
+                await serializer.PushObjectAsync(benchmarkPoco);
+                await serializer.FlushAsync();
+            }
+            var serializationDuration = timer.ElapsedMilliseconds;
+
+            await Task.Delay(1000); // Give time to release control of file
+            var delayDuration = timer.ElapsedMilliseconds;
+
+            using (var stream = File.Open("test.bin", FileMode.Open))
+            using (var deserializer = new BigObjectDeserializer(stream))
+            {
+                deserializedBenchmarkPoco = await deserializer.PopObjectAsync<BenchmarkPoco>();
+            }
+            var deserializationDuration = timer.ElapsedMilliseconds;
+            
+            _output.WriteLine($"Serialization: {TimeSpan.FromMilliseconds(serializationDuration).TotalSeconds}s, Deserialization: {TimeSpan.FromMilliseconds(deserializationDuration - delayDuration).TotalSeconds}s");
+        }
+
         [Fact]
         public async Task BasicSerialization()
         {
@@ -143,6 +191,59 @@ namespace BigObjectSerializer.Test
             }
         }
 
+        [Fact]
+        public async Task BasicFileStreamReflectiveSerialization()
+        {
+            var basicPoco = new BasicPoco()
+            {
+                NullStringValue = null,
+                IntValues = new List<int>() { 56, 57, 58 },
+                IntValue = 238,
+                UintValue = 543,
+                ShortValue = 12,
+                UShortValue = 42,
+                LongValue = 400002340000000L,
+                ULongValue = 600000964000000UL,
+                ByteValue = 0xF3,
+                BoolValue = true,
+                FloatValue = 921523.129521f,
+                DoubleValue = 192510921421.012351298d,
+                StringValue = "testString",
+                StringValues = new List<string>() { "first", "second", "third" },
+                DoubleValues = new[] { 24521.523d, 12451251.9957d }
+            };
+
+            using (var stream = File.Open("test.bin", FileMode.Create))
+            using (var serializer = new BigObjectSerializer(stream))
+            {
+                await serializer.PushObjectAsync(basicPoco);
+                await serializer.FlushAsync();
+            }
+
+            await Task.Delay(1000); // Give time to release control of file
+
+            using (var stream = File.Open("test.bin", FileMode.Open))
+            using (var deserializer = new BigObjectDeserializer(stream))
+            {
+                var deserializedBasicPoco = await deserializer.PopObjectAsync<BasicPoco>();
+
+                Assert.Equal(basicPoco.NullStringValue, deserializedBasicPoco.NullStringValue);
+                Assert.True(basicPoco.IntValues.SequenceEqual(deserializedBasicPoco.IntValues));
+                Assert.Equal(basicPoco.IntValue, deserializedBasicPoco.IntValue);
+                Assert.Equal(basicPoco.UintValue, deserializedBasicPoco.UintValue);
+                Assert.Equal(basicPoco.ShortValue, deserializedBasicPoco.ShortValue);
+                Assert.Equal(basicPoco.UShortValue, deserializedBasicPoco.UShortValue);
+                Assert.Equal(basicPoco.LongValue, deserializedBasicPoco.LongValue);
+                Assert.Equal(basicPoco.ULongValue, deserializedBasicPoco.ULongValue);
+                Assert.Equal(basicPoco.ByteValue, deserializedBasicPoco.ByteValue);
+                Assert.Equal(basicPoco.FloatValue, deserializedBasicPoco.FloatValue);
+                Assert.Equal(basicPoco.DoubleValue, deserializedBasicPoco.DoubleValue);
+                Assert.Equal(basicPoco.StringValue, deserializedBasicPoco.StringValue);
+                Assert.True(basicPoco.StringValues.SequenceEqual(deserializedBasicPoco.StringValues));
+                Assert.True(basicPoco.DoubleValues.SequenceEqual(deserializedBasicPoco.DoubleValues));
+            }
+        }
+        
         [Fact]
         public async Task ReflectiveSerialization()
         {

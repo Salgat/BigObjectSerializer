@@ -107,7 +107,7 @@ namespace BigObjectSerializer
 
         private async Task FlushIfRequiredAsync(bool forceFlush = false)
         {
-            if (forceFlush || _activeBufferPosition - _bufferSize < LargestBufferObject)
+            if (forceFlush || _bufferSize - _activeBufferPosition < LargestBufferObject)
             {
                 // No room for largest object left, flush current contents
                 await _pendingFlush.ConfigureAwait(false); // Wait for pending flush to finish if it hasn't
@@ -118,6 +118,8 @@ namespace BigObjectSerializer
                 // Swap buffers to allow new buffer to fill up while flush is occurring
                 _activeBuffer = _activeBuffer == 0 ? 1 : 0;
                 _activeBufferPosition = 0;
+
+                if (forceFlush) await _pendingFlush;
             }
         }
 

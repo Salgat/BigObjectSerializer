@@ -26,4 +26,18 @@ namespace BigObjectSerializer.Test
         public double DoubleValue { get; set; }
         public byte[] ByteValues { get; set; }
     }
+
+    public class BenchmarkPoco
+    {
+        public string StringValue { get; set; }
+        public IDictionary<Guid, BenchmarkPoco2> DictionaryValues { get; set; }
+        public IList<double> DoubleValues { get; set; }
+    }
+
+    public class BenchmarkPoco2
+    {
+        public int IntValue { get; set; }
+        public string StringValue { get; set; }
+        public Guid GuidValue { get; set; }
+    }
 }
