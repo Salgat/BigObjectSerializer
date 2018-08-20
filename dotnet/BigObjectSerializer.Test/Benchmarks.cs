@@ -23,7 +23,7 @@ namespace BigObjectSerializer.Test
             get
             {
                 var theoryData = new TheoryData<int>();
-                for (var i = 1; i <= 10000; i *= 10)
+                for (var i = 1; i <= 100000; i *= 10)
                 {
                     theoryData.Add(i);
                 }

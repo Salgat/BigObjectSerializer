@@ -13,9 +13,15 @@ namespace BigObjectSerializer
 {
     public class BigObjectDeserializer : IDisposable
     {
+        private static int Counter = 0;
+
         private Func<byte[], int, CancellationToken, Task> _readFunc;
         private readonly bool _isLittleEndian = BitConverter.IsLittleEndian;
-        private readonly byte[] _inputBuffer = new byte[8];
+        private readonly byte[] _inputBuffer = new byte[8*1000000];
+        private readonly byte[] _inputBufferOld = new byte[LargestBufferObject]; // This holds the last 8 bytes of the old buffer
+        private const int LargestBufferObject = 8; // 8 bytes (long - 64 bits)
+        private int _inputBufferOffset = 0;
+        private bool _initialized = false;
 
         // Safely copying byte contents of float and double derived from https://github.com/google/flatbuffers/blob/master/net/FlatBuffers/ByteBuffer.cs
         private float[] _floatBuffer = new[] { 0.0f };
@@ -64,10 +70,10 @@ namespace BigObjectSerializer
             _readFunc = async (inputBuffer, readCount, cancellationToken) =>
             {
                 var byteCount = await inputStream.ReadAsync(inputBuffer, 0, readCount, cancellationToken);
-                if (byteCount != readCount)
+                /*if (byteCount != readCount)
                 {
                     throw new ArgumentException($"Expected to read count of {readCount} but read {byteCount}.");
-                }
+                }*/
             };
         }
 
@@ -75,23 +81,75 @@ namespace BigObjectSerializer
 
         private async Task<ulong> ReadAsync(int count)
         {
+            ++Counter;
+            if (count > LargestBufferObject) throw new ArgumentException($"Cannot read larger than {LargestBufferObject} bytes at a time.");
+
             ulong result = 0;
-            await _readFunc(_inputBuffer, count, CancellationToken.None);
+
+            var inputBufferOffset = _inputBufferOffset;
+            var useOldBuffer = false;
+            if (!_initialized || _inputBufferOffset + count >= _inputBuffer.Length)
+            {
+                if (_initialized)
+                {
+                    if (_inputBufferOffset != _inputBuffer.Length)
+                    {
+                        Buffer.BlockCopy(_inputBuffer, _inputBuffer.Length - LargestBufferObject, _inputBufferOld, 0, LargestBufferObject);
+                        useOldBuffer = true;
+                    }
+                }
+                else
+                {
+                    _initialized = true;
+                }
+
+                await _readFunc(_inputBuffer, _inputBuffer.Length, CancellationToken.None);
+                _inputBufferOffset = (_inputBufferOffset + count) % LargestBufferObject;
+            }
+            else
+            {
+                _inputBufferOffset += count;
+            }
 
             if (_isLittleEndian)
             {
                 for (var i = 0; i < count; ++i)
                 {
-                    result |= (ulong)_inputBuffer[i] << i * 8;
+                    var index = inputBufferOffset + i;
+                    if (index >= _inputBuffer.Length)
+                    {
+                        result |= (ulong)_inputBuffer[index % 8] << i * 8;
+                    }
+                    else if (useOldBuffer)
+                    {
+                        result |= (ulong)_inputBufferOld[index % 8] << i * 8;
+                    }
+                    else
+                    {
+                        result |= (ulong)_inputBuffer[index] << i * 8;
+                    }
                 }
             }
             else
             {
                 for (var i = 0; i < count; ++i)
                 {
-                    result |= (ulong)_inputBuffer[count - 1 - i] << i * 8;
+                    var index = inputBufferOffset + count - 1 - i;
+                    if (index >= _inputBuffer.Length)
+                    {
+                        result |= (ulong)_inputBufferOld[index % 8] << i * 8;
+                    }
+                    else if (useOldBuffer)
+                    {
+                        result |= (ulong)_inputBufferOld[index % 8] << i * 8;
+                    }
+                    else
+                    {
+                        result |= (ulong)_inputBuffer[index] << i * 8;
+                    }
                 }
             }
+            
             return result;
         }
 
@@ -109,8 +167,14 @@ namespace BigObjectSerializer
 
         private async Task<byte> ReadByteAsync()
         {
-            await _readFunc(_inputBuffer, 1, CancellationToken.None);
-            return _inputBuffer[0];
+            if (!_initialized || _inputBufferOffset >= _inputBuffer.Length)
+            {
+                _initialized = true;
+                await _readFunc(_inputBuffer, _inputBuffer.Length, CancellationToken.None);
+                _inputBufferOffset = 0;
+            }
+            _inputBufferOffset += 1;
+            return _inputBuffer[_inputBufferOffset - 1];
         }
 
         public Task<int> PopIntAsync()
