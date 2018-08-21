@@ -201,7 +201,7 @@ namespace BigObjectSerializer
                 var bytesAvailableToReadFromBuffer = _inputBuffer.Length - _inputBufferOffset;
                 if (bytesAvailableToReadFromBuffer == 0)
                 {
-                    await _readFunc(_inputBuffer, _inputBuffer.Length, CancellationToken.None);
+                    await _readFunc(_inputBuffer, _inputBuffer.Length, CancellationToken.None).ConfigureAwait(false);
                     _inputBufferOffset = 0;
                 }
 
@@ -233,7 +233,7 @@ namespace BigObjectSerializer
             // Null check
             if (type.IsClass)
             {
-                if (await PopByteAsync() == 0x0)
+                if (await PopByteAsync().ConfigureAwait(false) == 0x0)
                 {
                     return null;
                 }
@@ -243,22 +243,22 @@ namespace BigObjectSerializer
             if (_popValueTypes.Contains(typeWithoutGenerics))
             {
                 // Raw value to push
-                return await PopValueAsync(type, depth + 1, maxDepth);
+                return await PopValueAsync(type, depth + 1, maxDepth).ConfigureAwait(false);
             }
             else if (typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics))
             {
-                return await PopKeyValuePairAsync(type, depth + 1, maxDepth);
+                return await PopKeyValuePairAsync(type, depth + 1, maxDepth).ConfigureAwait(false);
             }
 
             // Create and populate object
             var result = Activator.CreateInstance(type);
             var propertiesToSet = GetPropertiesToSet(type); // For now we only consider properties with getter/setter
 
-            if (await PopStringAsync() != "__BOS_S") throw new ArgumentException("Expected start of object.");
+            if (await PopStringAsync().ConfigureAwait(false) != "__BOS_S") throw new ArgumentException("Expected start of object.");
 
             while (true)
             {
-                var propertyName = await PopStringAsync();
+                var propertyName = await PopStringAsync().ConfigureAwait(false);
                 if (propertyName == "__BOS_E") break; // End of object
 
                 if (!propertiesToSet.ContainsKey(propertyName))
@@ -270,11 +270,11 @@ namespace BigObjectSerializer
 
                 var propertyType = matchingProperty.PropertyType;
 
-                var propertyHasValue = await PopByteAsync() == 0x01;
+                var propertyHasValue = await PopByteAsync().ConfigureAwait(false) == 0x01;
 
                 if (!propertyHasValue) continue; // Ignore null values
                 
-                var propertyValue = await PopValueAsync(propertyType, depth + 1, maxDepth);
+                var propertyValue = await PopValueAsync(propertyType, depth + 1, maxDepth).ConfigureAwait(false);
                 matchingProperty.SetValue(result, propertyValue);
             }
 
@@ -296,7 +296,7 @@ namespace BigObjectSerializer
 
         private async Task<object> PopValueAsync(Type type, int depth, int maxDepth)
         {
-            var (success, result) = await TryPopBasicTypeAsync(type);
+            var (success, result) = await TryPopBasicTypeAsync(type).ConfigureAwait(false);
             if (success)
             {
                 // Property was basic supported type and was pushed
@@ -306,11 +306,11 @@ namespace BigObjectSerializer
             {
                 // For collections, we can just store the values and let the deserializer figure out what container to put them inside
                 var genericType = Utilities.GetElementType(type);
-                var length = await PopIntAsync();
+                var length = await PopIntAsync().ConfigureAwait(false);
                 var entries = new List<object>();
                 for (var i = 0; i < length; ++i)
                 {
-                    var value = await PopObjectAsync(genericType, depth + 1, maxDepth);
+                    var value = await PopObjectAsync(genericType, depth + 1, maxDepth).ConfigureAwait(false);
                     entries.Add(value);
                 }
                 
@@ -346,7 +346,7 @@ namespace BigObjectSerializer
             }
             else if (type.IsClass) // TODO: Handle structs
             {
-                return await PopObjectAsync(type, depth + 1, maxDepth);
+                return await PopObjectAsync(type, depth + 1, maxDepth).ConfigureAwait(false);
             }
             else
             {
@@ -358,8 +358,8 @@ namespace BigObjectSerializer
         {
             // KeyValuePair is popped as the key then value
             var genericParameters = type.GetGenericArguments();
-            var kvKey = await PopObjectAsync(genericParameters[0], depth + 1, maxDepth);
-            var kvValue = await PopObjectAsync(genericParameters[1], depth + 1, maxDepth);
+            var kvKey = await PopObjectAsync(genericParameters[0], depth + 1, maxDepth).ConfigureAwait(false);
+            var kvValue = await PopObjectAsync(genericParameters[1], depth + 1, maxDepth).ConfigureAwait(false);
 
             var constructor = type.GetConstructors().First();
             return constructor.Invoke(new[] { kvKey, kvValue });
@@ -370,7 +370,7 @@ namespace BigObjectSerializer
             if (_basicTypePopMethods.ContainsKey(type))
             {
                 var task = (Task)_basicTypePopMethods[type].Invoke(this, new object[0]);
-                await task;
+                await task.ConfigureAwait(false);
                 var resultProperty = typeof(Task<>).MakeGenericType(type).GetProperty(nameof(Task<object>.Result));
                 return (true, resultProperty.GetValue(task));
             }

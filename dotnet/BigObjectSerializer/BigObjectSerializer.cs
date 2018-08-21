@@ -13,7 +13,6 @@ namespace BigObjectSerializer
 {
     public class BigObjectSerializer : IDisposable
     {
-        private readonly SemaphoreSlim _bufferLock = new SemaphoreSlim(1);
         private int _activeBuffer = 0;
         private int _activeBufferPosition = 0;
         private readonly IList<byte[]> _buffers;
@@ -59,7 +58,7 @@ namespace BigObjectSerializer
             _pushValueTypes = pushValueTypes.ToImmutableHashSet();
         }
 
-        public BigObjectSerializer(Func<ReadOnlyMemory<byte>, CancellationToken, Task> writeFunc, int bufferSize = 1000000)
+        public BigObjectSerializer(Func<ReadOnlyMemory<byte>, CancellationToken, Task> writeFunc, int bufferSize = 10000000)
         {
             _bufferSize = bufferSize;
             _buffers = new List<byte[]>()
@@ -70,7 +69,7 @@ namespace BigObjectSerializer
             _flushCallback = writeFunc;
         }
 
-        public BigObjectSerializer(Stream outputStream, int bufferSize = 1000000)
+        public BigObjectSerializer(Stream outputStream, int bufferSize = 10000000)
         {
             _bufferSize = bufferSize;
             _buffers = new List<byte[]>()
@@ -80,8 +79,8 @@ namespace BigObjectSerializer
             };
             _flushCallback = async (valuesToWrite, cancellationToken) =>
             {
-                await outputStream.WriteAsync(valuesToWrite.ToArray(), 0, valuesToWrite.Length, cancellationToken);
-                await outputStream.FlushAsync(cancellationToken);
+                await outputStream.WriteAsync(valuesToWrite.ToArray(), 0, valuesToWrite.Length, cancellationToken).ConfigureAwait(false);
+                await outputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
             };
         }
 
@@ -102,24 +101,24 @@ namespace BigObjectSerializer
         #region Push
 
         public Task FlushAsync()
-            => FlushIfRequiredAsync(true);
+            => FlushAsync(true);
 
-        private async Task FlushIfRequiredAsync(bool forceFlush = false)
+        private bool IsFlushRequired()
+            => _bufferSize - _activeBufferPosition < LargestBufferObject;
+
+        private async Task FlushAsync(bool blockingFlush = false)
         {
-            if (forceFlush || _bufferSize - _activeBufferPosition < LargestBufferObject)
-            {
-                // No room for largest object left, flush current contents
-                await _pendingFlush.ConfigureAwait(false); // Wait for pending flush to finish if it hasn't
+            // No room for largest object left, flush current contents
+            await _pendingFlush.ConfigureAwait(false); // Wait for pending flush to finish if it hasn't
                     
-                var memorySpan = new ReadOnlyMemory<byte>(_buffers[_activeBuffer], 0, _activeBufferPosition);
-                _pendingFlush = Task.Run(() => _flushCallback(memorySpan, CancellationToken.None));
+            var memorySpan = new ReadOnlyMemory<byte>(_buffers[_activeBuffer], 0, _activeBufferPosition);
+            _pendingFlush = Task.Run(() => _flushCallback(memorySpan, CancellationToken.None));
 
-                // Swap buffers to allow new buffer to fill up while flush is occurring
-                _activeBuffer = _activeBuffer == 0 ? 1 : 0;
-                _activeBufferPosition = 0;
+            // Swap buffers to allow new buffer to fill up while flush is occurring
+            _activeBuffer = _activeBuffer == 0 ? 1 : 0;
+            _activeBufferPosition = 0;
 
-                if (forceFlush) await _pendingFlush;
-            }
+            if (blockingFlush) await _pendingFlush.ConfigureAwait(false);
         }
 
         private void WriteValue(ulong data, int count, byte[] target, int offset)
@@ -137,37 +136,21 @@ namespace BigObjectSerializer
 
         private async Task WriteAndFlushIfRequireAsync(ulong data, int count)
         {
-            await _bufferLock.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                WriteValue(data, count, _buffers[_activeBuffer], _activeBufferPosition);
-                _activeBufferPosition += count;
-                await FlushIfRequiredAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                _bufferLock.Release();
-            }
+            WriteValue(data, count, _buffers[_activeBuffer], _activeBufferPosition);
+            _activeBufferPosition += count;
+            if (IsFlushRequired()) await FlushAsync(false).ConfigureAwait(false);
         }
         
         private async Task WriteByteAndFlushIfRequireAsync(byte data)
         {
-            await _bufferLock.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                _buffers[_activeBuffer][_activeBufferPosition] = data;
-                ++_activeBufferPosition;
-                await FlushIfRequiredAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                _bufferLock.Release();
-            }
+            _buffers[_activeBuffer][_activeBufferPosition] = data;
+            ++_activeBufferPosition;
+            if (IsFlushRequired()) await FlushAsync(false).ConfigureAwait(false);
         }
 
         public async Task PushStringAsync(string value)
         {
-            await PushIntAsync(value.Length); // First int stores length of string
+            await PushIntAsync(value.Length).ConfigureAwait(false); // First int stores length of string
             foreach (var b in Encoding.UTF8.GetBytes(value)) {
                 await WriteByteAndFlushIfRequireAsync(b).ConfigureAwait(false);
             }
@@ -233,11 +216,11 @@ namespace BigObjectSerializer
             {
                 if (value is null)
                 {
-                    await PushByteAsync(0x0);
+                    await PushByteAsync(0x0).ConfigureAwait(false);
                 }
                 else
                 {
-                    await PushByteAsync(0x1);
+                    await PushByteAsync(0x1).ConfigureAwait(false);
                 }
             }
 
@@ -247,42 +230,42 @@ namespace BigObjectSerializer
             if (_pushValueTypes.Contains(typeWithoutGenerics)) // Might be better to instead check if it's one of the types directly serializable
             {
                 // Raw value to push
-                await PushValueAsync(value, type, depth + 1, maxDepth);
+                await PushValueAsync(value, type, depth + 1, maxDepth).ConfigureAwait(false);
                 return;
             }
             else if (typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics))
             {
-                await PushKeyValuePairAsync(value, type, depth + 1, maxDepth);
+                await PushKeyValuePairAsync(value, type, depth + 1, maxDepth).ConfigureAwait(false);
                 return;
             }
 
-            await PushStringAsync("__BOS_S");
+            await PushStringAsync("__BOS_S").ConfigureAwait(false);
             foreach (var property in properties.Where(p => p.CanRead && p.CanWrite)) // For now we only consider properties with getter/setter
             {
                 var propertyType = property.PropertyType;
                 var name = property.Name;
                 var propertyValue = property.GetValue(value);
 
-                await PushStringAsync(name); // Property name is pushed first to help deserialization handle extra or out of order properties changed after serialization
+                await PushStringAsync(name).ConfigureAwait(false); // Property name is pushed first to help deserialization handle extra or out of order properties changed after serialization
 
                 if (propertyValue == null)
                 {
                     // Null values are marked with byte value 0x00 and skipped
-                    await PushByteAsync(0x0);
+                    await PushByteAsync(0x0).ConfigureAwait(false);
                     continue;
                 }
                 else
                 {
-                    await PushByteAsync(0x1);
+                    await PushByteAsync(0x1).ConfigureAwait(false);
                 }
-                await PushValueAsync(propertyValue, propertyType, depth + 1, maxDepth);
+                await PushValueAsync(propertyValue, propertyType, depth + 1, maxDepth).ConfigureAwait(false);
             }
-            await PushStringAsync("__BOS_E");
+            await PushStringAsync("__BOS_E").ConfigureAwait(false);
         }
 
         private async Task PushValueAsync(object value, Type type, int depth, int maxDepth)
         {
-            if (await TryPushBasicTypeAsync(value, type))
+            if (await TryPushBasicTypeAsync(value, type).ConfigureAwait(false))
             {
                 // Property was basic supported type and was pushed
                 return;
@@ -293,15 +276,15 @@ namespace BigObjectSerializer
                 var genericType = Utilities.GetElementType(type);
                 var enumerable = ((IEnumerable)value).OfType<object>();
 
-                await PushIntAsync(enumerable.Count()); // Store the length of the enumerable
+                await PushIntAsync(enumerable.Count()).ConfigureAwait(false); // Store the length of the enumerable
                 foreach (var entry in enumerable)
                 {
-                    await PushObjectAsync(entry, genericType, depth + 1, maxDepth);
+                    await PushObjectAsync(entry, genericType, depth + 1, maxDepth).ConfigureAwait(false);
                 }
             }
             else if (type.IsClass) // TODO: Handle structs
             {
-                await PushObjectAsync(value, type, depth + 1, maxDepth);
+                await PushObjectAsync(value, type, depth + 1, maxDepth).ConfigureAwait(false);
             }
             else
             {
@@ -316,8 +299,8 @@ namespace BigObjectSerializer
             var kvKey = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Key));
             var kvValue = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Value));
 
-            await PushObjectAsync(kvKey.GetValue(value), kvKey.PropertyType, depth + 1, maxDepth);
-            await PushObjectAsync(kvValue.GetValue(value), kvValue.PropertyType, depth + 1, maxDepth);
+            await PushObjectAsync(kvKey.GetValue(value), kvKey.PropertyType, depth + 1, maxDepth).ConfigureAwait(false);
+            await PushObjectAsync(kvValue.GetValue(value), kvValue.PropertyType, depth + 1, maxDepth).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -330,7 +313,7 @@ namespace BigObjectSerializer
         {
             if (_basicTypePushMethods.ContainsKey(type))
             {
-                await (Task)_basicTypePushMethods[type].Invoke(this, new[] { value });
+                await ((Task)_basicTypePushMethods[type].Invoke(this, new[] { value })).ConfigureAwait(false);
                 return true;
             }
             return false;
