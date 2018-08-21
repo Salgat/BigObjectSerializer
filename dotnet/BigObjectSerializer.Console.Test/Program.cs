@@ -53,7 +53,7 @@ namespace BigObjectSerializer.Console.Test
                 System.Console.WriteLine($"DictionaryValues count: {benchmarkPoco.DictionaryValues.Count()}, DoubleValues count: {benchmarkPoco.DoubleValues.Count}");
                 System.Console.WriteLine($"Serialization: {TimeSpan.FromMilliseconds(serializationDuration).TotalSeconds}s, Deserialization: {TimeSpan.FromMilliseconds(deserializationDuration - delayDuration).TotalSeconds}s");
             }).Wait();
-            System.Console.ReadLine();
+            //System.Console.ReadLine();
         }
     }
 }

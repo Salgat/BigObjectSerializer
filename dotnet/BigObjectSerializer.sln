@@ -7,7 +7,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "BigObjectSerializer", "BigO
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "BigObjectSerializer.Test", "BigObjectSerializer.Test\BigObjectSerializer.Test.csproj", "{2CD4D399-C3A7-4A2F-A696-35E476509ACB}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BigObjectSerializer.Console.Test", "BigObjectSerializer.Console.Test\BigObjectSerializer.Console.Test.csproj", "{011E60BE-D6DC-4E49-BFA1-AF1AD3229A2A}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "BigObjectSerializer.Console.Test", "BigObjectSerializer.Console.Test\BigObjectSerializer.Console.Test.csproj", "{011E60BE-D6DC-4E49-BFA1-AF1AD3229A2A}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{EE65B47F-792E-403D-BCE8-17939319A2B0}"
 	ProjectSection(SolutionItems) = preProject
@@ -41,5 +41,8 @@ Global
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {77A2BA01-2AFD-4F2A-A388-5D7A2CD2B90F}
+	EndGlobalSection
+	GlobalSection(Performance) = preSolution
+		HasPerformanceSessions = true
 	EndGlobalSection
 EndGlobal

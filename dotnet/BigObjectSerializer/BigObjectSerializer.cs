@@ -21,7 +21,6 @@ namespace BigObjectSerializer
         private Task _pendingFlush = Task.CompletedTask;
         private readonly int _bufferSize;
         private const int LargestBufferObject = 8; // 8 bytes (long - 64 bits)
-        private readonly bool _isLittleEndian = BitConverter.IsLittleEndian;
 
         // Safely copying byte contents of float and double derived from https://github.com/google/flatbuffers/blob/master/net/FlatBuffers/ByteBuffer.cs
         private float[] _floatBuffer = new[] { 0.0f };
@@ -129,20 +128,10 @@ namespace BigObjectSerializer
             {
                 throw new ArgumentException($"Values to write to buffer cannot be larger than {LargestBufferObject} in bytes.");
             }
-
-            if (_isLittleEndian)
+            
+            for (var i = 0; i < count; ++i)
             {
-                for (var i = 0; i < count; ++i)
-                {
-                    target[offset + i] = (byte)(data >> i * 8);
-                }
-            }
-            else
-            {
-                for (var i = 0; i < count; ++i)
-                {
-                    target[offset + count - 1 - i] = (byte)(data >> i * 8);
-                }
+                target[offset + i] = (byte)(data >> i * 8);
             }
         }
 

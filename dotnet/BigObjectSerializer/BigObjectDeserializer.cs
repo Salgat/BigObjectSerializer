@@ -16,7 +16,6 @@ namespace BigObjectSerializer
         private static int Counter = 0;
 
         private Func<byte[], int, CancellationToken, Task> _readFunc;
-        private readonly bool _isLittleEndian = BitConverter.IsLittleEndian;
         private readonly byte[] _inputBuffer = new byte[8*1000000];
         private readonly byte[] _inputBufferOld = new byte[LargestBufferObject]; // This holds the last 8 bytes of the old buffer
         private const int LargestBufferObject = 8; // 8 bytes (long - 64 bits)
@@ -87,8 +86,9 @@ namespace BigObjectSerializer
             ulong result = 0;
 
             var inputBufferOffset = _inputBufferOffset;
+            var inputBufferOffsetPlusCount = _inputBufferOffset + count;
             var useOldBuffer = false;
-            if (!_initialized || _inputBufferOffset + count >= _inputBuffer.Length)
+            if (!_initialized || inputBufferOffsetPlusCount >= _inputBuffer.Length)
             {
                 if (_initialized)
                 {
@@ -104,49 +104,27 @@ namespace BigObjectSerializer
                 }
 
                 await _readFunc(_inputBuffer, _inputBuffer.Length, CancellationToken.None);
-                _inputBufferOffset = (_inputBufferOffset + count) % LargestBufferObject;
+                _inputBufferOffset = (inputBufferOffsetPlusCount) % LargestBufferObject;
             }
             else
             {
-                _inputBufferOffset += count;
+                _inputBufferOffset = inputBufferOffsetPlusCount;
             }
-
-            if (_isLittleEndian)
+            
+            for (var i = 0; i < count; ++i)
             {
-                for (var i = 0; i < count; ++i)
+                var index = inputBufferOffset + i;
+                if (index >= _inputBuffer.Length)
                 {
-                    var index = inputBufferOffset + i;
-                    if (index >= _inputBuffer.Length)
-                    {
-                        result |= (ulong)_inputBuffer[index % 8] << i * 8;
-                    }
-                    else if (useOldBuffer)
-                    {
-                        result |= (ulong)_inputBufferOld[index % 8] << i * 8;
-                    }
-                    else
-                    {
-                        result |= (ulong)_inputBuffer[index] << i * 8;
-                    }
+                    result |= (ulong)_inputBuffer[index % 8] << i * 8;
                 }
-            }
-            else
-            {
-                for (var i = 0; i < count; ++i)
+                else if (!useOldBuffer)
                 {
-                    var index = inputBufferOffset + count - 1 - i;
-                    if (index >= _inputBuffer.Length)
-                    {
-                        result |= (ulong)_inputBufferOld[index % 8] << i * 8;
-                    }
-                    else if (useOldBuffer)
-                    {
-                        result |= (ulong)_inputBufferOld[index % 8] << i * 8;
-                    }
-                    else
-                    {
-                        result |= (ulong)_inputBuffer[index] << i * 8;
-                    }
+                    result |= (ulong)_inputBuffer[index] << i * 8;
+                }
+                else
+                {
+                    result |= (ulong)_inputBufferOld[index % 8] << i * 8;
                 }
             }
             
@@ -156,12 +134,8 @@ namespace BigObjectSerializer
         public async Task<string> PopStringAsync()
         {
             var length = await PopIntAsync(); // Strings start with an int value of the string length
-            var characterBytes = new byte[length];
-            for (var i = 0; i < length; ++i)
-            {
-                characterBytes[i] = await PopByteAsync();
-            }
-
+            var characterBytes = await PopBytesAsync(length);
+            
             return new string(Encoding.UTF8.GetChars(characterBytes));
         }
 
@@ -178,25 +152,22 @@ namespace BigObjectSerializer
         }
 
         public Task<int> PopIntAsync()
-            => ReadAsync(sizeof(int)).ContinueWith(t => (int)t.Result);
+            => ReadAsync(sizeof(int)).ContinueWith(t => (int)t.Result, TaskContinuationOptions.ExecuteSynchronously);
 
         public Task<uint> PopUnsignedIntAsync()
-            => ReadAsync(sizeof(int)).ContinueWith(t => (uint)t.Result);
+            => ReadAsync(sizeof(int)).ContinueWith(t => (uint)t.Result, TaskContinuationOptions.ExecuteSynchronously);
 
         public Task<short> PopShortAsync()
-            => ReadAsync(sizeof(short)).ContinueWith(t => (short)t.Result);
+            => ReadAsync(sizeof(short)).ContinueWith(t => (short)t.Result, TaskContinuationOptions.ExecuteSynchronously);
 
         public Task<ushort> PopUnsignedShortAsync()
-            => ReadAsync(sizeof(ushort)).ContinueWith(t => (ushort)t.Result);
+            => ReadAsync(sizeof(ushort)).ContinueWith(t => (ushort)t.Result, TaskContinuationOptions.ExecuteSynchronously);
 
         public Task<long> PopLongAsync()
-            => ReadAsync(sizeof(long)).ContinueWith(t => (long)t.Result);
+            => ReadAsync(sizeof(long)).ContinueWith(t => (long)t.Result, TaskContinuationOptions.ExecuteSynchronously);
 
         public Task<ulong> PopUnsignedLongAsync()
-            => ReadAsync(sizeof(ulong)).ContinueWith(t => (ulong)t.Result);
-
-        public Task<byte> PopByteAsync()
-            => ReadByteAsync();
+            => ReadAsync(sizeof(ulong)).ContinueWith(t => (ulong)t.Result, TaskContinuationOptions.ExecuteSynchronously);
 
         public async Task<bool> PopBoolAsync()
             => await ReadByteAsync() == (byte)0x1;
@@ -216,14 +187,41 @@ namespace BigObjectSerializer
         }
 
         public Task<Guid> PopGuidAsync()
-            => PopStringAsync().ContinueWith(t => new Guid(t.Result));
+            => PopStringAsync().ContinueWith(t => new Guid(t.Result), TaskContinuationOptions.ExecuteSynchronously);
+
+        public Task<byte> PopByteAsync()
+            => ReadByteAsync();
+
+        public async Task<byte[]> PopBytesAsync(int count)
+        {
+            var result = new byte[count];
+            var bytesRead = 0;
+            while (bytesRead != count)
+            {
+                var bytesAvailableToReadFromBuffer = _inputBuffer.Length - _inputBufferOffset;
+                if (bytesAvailableToReadFromBuffer == 0)
+                {
+                    await _readFunc(_inputBuffer, _inputBuffer.Length, CancellationToken.None);
+                    _inputBufferOffset = 0;
+                }
+
+                var bytesToRead = bytesAvailableToReadFromBuffer >= count - bytesRead ?
+                        count - bytesRead :
+                        bytesAvailableToReadFromBuffer;
+                Buffer.BlockCopy(_inputBuffer, _inputBufferOffset, result, bytesRead, bytesToRead);
+                bytesRead += bytesToRead;
+                _inputBufferOffset += bytesToRead;
+            }
+            
+            return result;
+        }
 
         #endregion
 
         #region Reflective Pop
 
         public Task<T> PopObjectAsync<T>(int maxDepth = 10) where T : new()
-            => PopObjectAsync(typeof(T), 1, maxDepth).ContinueWith(t => (T)t.Result);
+            => PopObjectAsync(typeof(T), 1, maxDepth).ContinueWith(t => (T)t.Result, TaskContinuationOptions.ExecuteSynchronously);
 
         public Task<object> PopObjectAsync(Type type, int maxDepth = 10)
             => PopObjectAsync(type, 1, maxDepth);
@@ -240,9 +238,7 @@ namespace BigObjectSerializer
                     return null;
                 }
             }
-
-            var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance).ToList();
-
+            
             var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
             if (_popValueTypes.Contains(typeWithoutGenerics))
             {
@@ -256,7 +252,7 @@ namespace BigObjectSerializer
 
             // Create and populate object
             var result = Activator.CreateInstance(type);
-            var propertiesToSet = properties.Where(p => p.CanRead && p.CanWrite); // For now we only consider properties with getter/setter
+            var propertiesToSet = GetPropertiesToSet(type); // For now we only consider properties with getter/setter
 
             if (await PopStringAsync() != "__BOS_S") throw new ArgumentException("Expected start of object.");
 
@@ -265,13 +261,13 @@ namespace BigObjectSerializer
                 var propertyName = await PopStringAsync();
                 if (propertyName == "__BOS_E") break; // End of object
 
-                var matchingProperty = propertiesToSet.FirstOrDefault(p => p.Name == propertyName);
-                if (matchingProperty == default)
+                if (!propertiesToSet.ContainsKey(propertyName))
                 {
                     // We don't know how many values to pop, so we can't determine how to skip
                     throw new ArgumentException($"Property name {propertyName} not found in type but is expected.");
                 }
-             
+                var matchingProperty = propertiesToSet[propertyName];
+
                 var propertyType = matchingProperty.PropertyType;
 
                 var propertyHasValue = await PopByteAsync() == 0x01;
@@ -283,6 +279,19 @@ namespace BigObjectSerializer
             }
 
             return result;
+        }
+
+        private readonly IDictionary<Type, IImmutableDictionary<string, PropertyInfo>> _propertiesByType = new Dictionary<Type, IImmutableDictionary<string, PropertyInfo>>();
+        private IImmutableDictionary<string, PropertyInfo> GetPropertiesToSet(Type type)
+        {
+            if (_propertiesByType.ContainsKey(type))
+            {
+                return _propertiesByType[type];
+            }
+            return _propertiesByType[type] = type
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => p.CanRead && p.CanWrite)
+                .ToImmutableDictionary(item => item.Name, item => item);
         }
 
         private async Task<object> PopValueAsync(Type type, int depth, int maxDepth)

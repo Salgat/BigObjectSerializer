@@ -22,8 +22,9 @@ namespace BigObjectSerializer.Test
         {
             get
             {
+                const int maxValue = 1000000;
                 var theoryData = new TheoryData<int>();
-                for (var i = 1; i <= 100000; i *= 10)
+                for (var i = 1; i <= maxValue; i *= 10)
                 {
                     theoryData.Add(i);
                 }
