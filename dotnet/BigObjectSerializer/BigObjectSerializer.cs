@@ -103,8 +103,20 @@ namespace BigObjectSerializer
         public Task FlushAsync()
             => FlushAsync(true);
 
+        /// <summary>
+        /// Returns true if there is not enough room to fit the largest buffer object.
+        /// </summary>
+        /// <returns></returns>
         private bool IsFlushRequired()
             => _bufferSize - _activeBufferPosition < LargestBufferObject;
+
+        /// <summary>
+        /// Returns true if there is not enough room to fit the given count in the buffer.
+        /// </summary>
+        /// <param name="count"></param>
+        /// <returns></returns>
+        private bool IsFlushRequired(int count)
+            => _bufferSize - _activeBufferPosition < count;
 
         private async Task FlushAsync(bool blockingFlush = false)
         {
@@ -136,24 +148,40 @@ namespace BigObjectSerializer
 
         private async Task WriteAndFlushIfRequireAsync(ulong data, int count)
         {
+            if (IsFlushRequired()) await FlushAsync(false).ConfigureAwait(false);
             WriteValue(data, count, _buffers[_activeBuffer], _activeBufferPosition);
             _activeBufferPosition += count;
-            if (IsFlushRequired()) await FlushAsync(false).ConfigureAwait(false);
         }
         
         private async Task WriteByteAndFlushIfRequireAsync(byte data)
         {
+            if (IsFlushRequired(1)) await FlushAsync(false).ConfigureAwait(false);
             _buffers[_activeBuffer][_activeBufferPosition] = data;
             ++_activeBufferPosition;
-            if (IsFlushRequired()) await FlushAsync(false).ConfigureAwait(false);
+        }
+
+        private async Task WriteBytesAndFlushIfRequired(byte[] data)
+        {
+            var dataPosition = 0;
+            while (true)
+            {
+                if (_bufferSize <= _activeBufferPosition) await FlushAsync(false).ConfigureAwait(false);
+
+                var bytesRemainingInBuffer = _bufferSize - _activeBufferPosition;
+                var bytesRemainingInData = data.Length - dataPosition;
+                var bytesToWrite = bytesRemainingInBuffer > bytesRemainingInData ? bytesRemainingInData : bytesRemainingInBuffer;
+
+                Buffer.BlockCopy(data, dataPosition, _buffers[_activeBuffer], _activeBufferPosition, bytesToWrite);
+                _activeBufferPosition += bytesToWrite;
+                dataPosition += bytesToWrite;
+                if (dataPosition >= data.Length) return;
+            }
         }
 
         public async Task PushStringAsync(string value)
         {
             await PushIntAsync(value.Length).ConfigureAwait(false); // First int stores length of string
-            foreach (var b in Encoding.UTF8.GetBytes(value)) {
-                await WriteByteAndFlushIfRequireAsync(b).ConfigureAwait(false);
-            }
+            await WriteBytesAndFlushIfRequired(Encoding.UTF8.GetBytes(value)).ConfigureAwait(false);
         }
 
         public Task PushIntAsync(int value)

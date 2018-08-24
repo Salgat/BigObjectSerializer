@@ -73,6 +73,30 @@ namespace BigObjectSerializer.Test
         }
 
         [Fact]
+        public async Task BasicStringSerialization()
+        {
+            byte[] serializedStream;
+            var stringToPush = "Test";
+
+            using (var stream = new MemoryStream())
+            using (var serializer = new BigObjectSerializer(stream))
+            {
+                await serializer.PushStringAsync(stringToPush);
+                await serializer.FlushAsync();
+
+                serializedStream = stream.ToArray();
+            }
+
+            using (var stream = new MemoryStream(serializedStream))
+            using (var deserializer = new BigObjectDeserializer(stream))
+            {
+                var stringVal = await deserializer.PopStringAsync();
+                
+                Assert.Equal(stringToPush, stringVal);
+            }
+        }
+
+        [Fact]
         public async Task BasicSerialization()
         {
             byte[] serializedStream;
