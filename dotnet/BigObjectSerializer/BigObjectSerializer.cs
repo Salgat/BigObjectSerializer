@@ -181,6 +181,7 @@ namespace BigObjectSerializer
         public async Task PushStringAsync(string value)
         {
             await PushIntAsync(value.Length).ConfigureAwait(false); // First int stores length of string
+            if (value.Length == 0) return;
             await WriteBytesAndFlushIfRequired(Encoding.UTF8.GetBytes(value)).ConfigureAwait(false);
         }
 
@@ -266,8 +267,7 @@ namespace BigObjectSerializer
                 await PushKeyValuePairAsync(value, type, depth + 1, maxDepth).ConfigureAwait(false);
                 return;
             }
-
-            await PushStringAsync("__BOS_S").ConfigureAwait(false);
+            
             foreach (var property in properties.Where(p => p.CanRead && p.CanWrite)) // For now we only consider properties with getter/setter
             {
                 var propertyType = property.PropertyType;
@@ -288,7 +288,7 @@ namespace BigObjectSerializer
                 }
                 await PushValueAsync(propertyValue, propertyType, depth + 1, maxDepth).ConfigureAwait(false);
             }
-            await PushStringAsync("__BOS_E").ConfigureAwait(false);
+            await PushStringAsync(string.Empty).ConfigureAwait(false); // Mark end of object (since no property can have an empty string label)
         }
 
         private async Task PushValueAsync(object value, Type type, int depth, int maxDepth)

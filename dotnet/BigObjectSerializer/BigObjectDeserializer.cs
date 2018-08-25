@@ -29,9 +29,11 @@ namespace BigObjectSerializer
         private ulong[] _ulongBuffer = new[] { 0UL };
 
         // Reflection
+        private readonly IDictionary<Type, IImmutableDictionary<string, PropertyInfo>> _propertiesByType = new Dictionary<Type, IImmutableDictionary<string, PropertyInfo>>();
         private static readonly IImmutableDictionary<Type, MethodInfo> _basicTypePopMethods; // Types that directly map to basic Pop Methods (such as PopIntAsync)
         private static readonly IImmutableDictionary<Type, PropertyInfo> _basicTypeGenericTaskResult; // Types that directly map to basic Pop Methods (such as PopIntAsync)
         private static readonly IImmutableSet<Type> _popValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
+        private readonly IDictionary<Type, ConstructorInfo> _keyValueConstructors = new Dictionary<Type, ConstructorInfo>();
 
         static BigObjectDeserializer()
         {
@@ -151,10 +153,11 @@ namespace BigObjectSerializer
 
         public async Task<string> PopStringAsync()
         {
-            var length = await PopIntAsync(); // Strings start with an int value of the string length
-            var characterBytes = await PopBytesAsync(length);
-            
-            return new string(Encoding.UTF8.GetChars(characterBytes));
+            var length = await PopIntAsync().ConfigureAwait(false); // Strings start with an int value of the string length
+            if (length == 0) return string.Empty;
+
+            var characterBytes = await PopBytesAsync(length).ConfigureAwait(false);
+            return Encoding.UTF8.GetString(characterBytes);
         }
 
         private async Task<byte> ReadByteAsync()
@@ -271,13 +274,10 @@ namespace BigObjectSerializer
             // Create and populate object
             var result = Activator.CreateInstance(type);
             var propertiesToSet = GetPropertiesToSet(type); // For now we only consider properties with getter/setter
-
-            if (await PopStringAsync().ConfigureAwait(false) != "__BOS_S") throw new ArgumentException("Expected start of object.");
-
             while (true)
             {
                 var propertyName = await PopStringAsync().ConfigureAwait(false);
-                if (propertyName == "__BOS_E") break; // End of object
+                if (propertyName == string.Empty) break; // End of object
 
                 if (!propertiesToSet.ContainsKey(propertyName))
                 {
@@ -299,7 +299,6 @@ namespace BigObjectSerializer
             return result;
         }
 
-        private readonly IDictionary<Type, IImmutableDictionary<string, PropertyInfo>> _propertiesByType = new Dictionary<Type, IImmutableDictionary<string, PropertyInfo>>();
         private IImmutableDictionary<string, PropertyInfo> GetPropertiesToSet(Type type)
         {
             if (_propertiesByType.ContainsKey(type))
@@ -378,9 +377,12 @@ namespace BigObjectSerializer
             var genericParameters = type.GetGenericArguments();
             var kvKey = await PopObjectAsync(genericParameters[0], depth + 1, maxDepth).ConfigureAwait(false);
             var kvValue = await PopObjectAsync(genericParameters[1], depth + 1, maxDepth).ConfigureAwait(false);
-
-            var constructor = type.GetConstructors().First();
-            return constructor.Invoke(new[] { kvKey, kvValue });
+            
+            if (!_keyValueConstructors.ContainsKey(type))
+            {
+                _keyValueConstructors[type] = type.GetConstructors().First();
+            }
+            return _keyValueConstructors[type].Invoke(new[] { kvKey, kvValue });
         }
 
         private async Task<(bool Success, object Result)> TryPopBasicTypeAsync(Type type)
