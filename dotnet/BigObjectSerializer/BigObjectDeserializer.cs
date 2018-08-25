@@ -35,6 +35,9 @@ namespace BigObjectSerializer
         private static readonly IImmutableDictionary<Type, PropertyInfo> _basicTypeGenericTaskResult; // Types that directly map to basic Pop Methods (such as PopInt)
         private static readonly IImmutableSet<Type> _popValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
         private readonly IDictionary<Type, ConstructorInfo> _keyValueConstructors = new Dictionary<Type, ConstructorInfo>();
+        private readonly IDictionary<Type, Type[]> _genericArguments = new Dictionary<Type, Type[]>();
+        private readonly IDictionary<Type, Type> _makeGenericTypeDictionary = new Dictionary<Type, Type>();
+        private readonly IDictionary<Type, Type> _makeGenericTypeHashset = new Dictionary<Type, Type>();
 
         static BigObjectDeserializer()
         {
@@ -55,23 +58,6 @@ namespace BigObjectSerializer
             };
             _basicTypePopMethods = popMethods.ToImmutableDictionary();
             
-            var genericTaskResults = new Dictionary<Type, PropertyInfo>
-            {
-                /*[typeof(int)] = typeof(>).MakeGenericType(typeof(int)).GetProperty(nameof(object>.Result)),
-                [typeof(uint)] = typeof(>).MakeGenericType(typeof(uint)).GetProperty(nameof(object>.Result)),
-                [typeof(short)] = typeof(>).MakeGenericType(typeof(short)).GetProperty(nameof(object>.Result)),
-                [typeof(ushort)] = typeof(>).MakeGenericType(typeof(ushort)).GetProperty(nameof(object>.Result)),
-                [typeof(long)] = typeof(>).MakeGenericType(typeof(long)).GetProperty(nameof(object>.Result)),
-                [typeof(ulong)] = typeof(>).MakeGenericType(typeof(ulong)).GetProperty(nameof(object>.Result)),
-                [typeof(byte)] = typeof(>).MakeGenericType(typeof(byte)).GetProperty(nameof(object>.Result)),
-                [typeof(bool)] = typeof(>).MakeGenericType(typeof(bool)).GetProperty(nameof(object>.Result)),
-                [typeof(float)] = typeof(>).MakeGenericType(typeof(float)).GetProperty(nameof(object>.Result)),
-                [typeof(double)] = typeof(>).MakeGenericType(typeof(double)).GetProperty(nameof(object>.Result)),
-                [typeof(string)] = typeof(>).MakeGenericType(typeof(string)).GetProperty(nameof(object>.Result)),
-                [typeof(Guid)] = typeof(>).MakeGenericType(typeof(Guid)).GetProperty(nameof(object>.Result))*/
-            };
-            _basicTypeGenericTaskResult = genericTaskResults.ToImmutableDictionary();
-
             var popValueTypes = popMethods.Select(kv => kv.Key).ToList();
             popValueTypes.Add(typeof(ISet<>));
             popValueTypes.Add(typeof(IDictionary<,>));
@@ -333,10 +319,14 @@ namespace BigObjectSerializer
                 
                 if (Utilities.IsAssignableToGenericType(type, typeof(IDictionary<,>)))
                 {
-                    var genericArguments = genericType.GetGenericArguments();
-                    var genericType1 = genericArguments[0];
-                    var genericType2 = genericArguments[1];
-                    var dictionaryGenericType = typeof(Dictionary<,>).MakeGenericType(genericType1, genericType2);
+                    if (!_makeGenericTypeDictionary.ContainsKey(genericType))
+                    {
+                        var genericArguments = genericType.GetGenericArguments();
+                        var genericType1 = genericArguments[0];
+                        var genericType2 = genericArguments[1];
+                        _makeGenericTypeDictionary[genericType] = typeof(Dictionary<,>).MakeGenericType(genericType1, genericType2);
+                    }
+                    var dictionaryGenericType = _makeGenericTypeDictionary[genericType];
                     return Utilities.CreateFromEnumerableConstructor(dictionaryGenericType, genericType, entries);
                 }
                 else if (type.IsArray)
@@ -345,8 +335,11 @@ namespace BigObjectSerializer
                 }
                 else if (Utilities.IsAssignableToGenericType(type, typeof(ISet<>)))
                 {
-                    var hashSetGenericType = typeof(HashSet<>).MakeGenericType(genericType);
-                    return Utilities.CreateFromEnumerableConstructor(hashSetGenericType, genericType, entries);
+                    if (!_makeGenericTypeHashset.ContainsKey(genericType))
+                    {
+                        _makeGenericTypeHashset[genericType] = typeof(HashSet<>).MakeGenericType(genericType);
+                    }
+                    return Utilities.CreateFromEnumerableConstructor(_makeGenericTypeHashset[genericType], genericType, entries);
                 }
                 else if (Utilities.IsAssignableToGenericType(type, typeof(IList<>)))
                 {
@@ -374,7 +367,12 @@ namespace BigObjectSerializer
         private object PopKeyValuePair(Type type, int depth, int maxDepth)
         {
             // KeyValuePair is popped as the key then value
-            var genericParameters = type.GetGenericArguments();
+            if (!_genericArguments.ContainsKey(type))
+            {
+                _genericArguments[type] = type.GetGenericArguments();
+            }
+            
+            var genericParameters = _genericArguments[type];
             var kvKey = PopObject(genericParameters[0], depth + 1, maxDepth);
             var kvValue = PopObject(genericParameters[1], depth + 1, maxDepth);
             
