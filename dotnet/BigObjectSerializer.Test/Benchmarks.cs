@@ -25,7 +25,7 @@ namespace BigObjectSerializer.Test
             {
                 return new TheoryData<int>()
                 {
-                    1, 100, 10000, 1000000, 5000000
+                    1, 100, 10000, 1000000, 5000000, 15000000
                 };
             }
         }
@@ -52,8 +52,8 @@ namespace BigObjectSerializer.Test
             using (var stream = File.Open("test.bin", FileMode.Create))
             using (var serializer = new BigObjectSerializer(stream))
             {
-                await serializer.PushObjectAsync(benchmarkPoco);
-                await serializer.FlushAsync();
+                serializer.PushObject(benchmarkPoco);
+                serializer.Flush();
             }
             var serializationDuration = timer.ElapsedMilliseconds;
 
@@ -63,7 +63,7 @@ namespace BigObjectSerializer.Test
             using (var stream = File.Open("test.bin", FileMode.Open))
             using (var deserializer = new BigObjectDeserializer(stream))
             {
-                deserializedBenchmarkPoco = await deserializer.PopObjectAsync<BenchmarkPoco>();
+                deserializedBenchmarkPoco = deserializer.PopObject<BenchmarkPoco>();
             }
             var deserializationDuration = timer.ElapsedMilliseconds;
 
@@ -100,8 +100,8 @@ namespace BigObjectSerializer.Test
             using (var stream = new MemoryStream())
             using (var serializer = new BigObjectSerializer(stream))
             {
-                await serializer.PushStringAsync(stringToPush);
-                await serializer.FlushAsync();
+                serializer.PushString(stringToPush);
+                serializer.Flush();
 
                 serializedStream = stream.ToArray();
             }
@@ -109,7 +109,7 @@ namespace BigObjectSerializer.Test
             using (var stream = new MemoryStream(serializedStream))
             using (var deserializer = new BigObjectDeserializer(stream))
             {
-                var stringVal = await deserializer.PopStringAsync();
+                var stringVal = deserializer.PopString();
                 
                 Assert.Equal(stringToPush, stringVal);
             }
@@ -135,18 +135,18 @@ namespace BigObjectSerializer.Test
             using (var stream = new MemoryStream())
             using (var serializer = new BigObjectSerializer(stream))
             {
-                await serializer.PushIntAsync(intToPush);
-                await serializer.PushBoolAsync(boolToPush);
-                await serializer.PushShortAsync(shortToPush);
-                await serializer.PushStringAsync(stringToPush);
-                await serializer.PushByteAsync(byteToPush);
-                await serializer.PushUnsignedShortAsync(ushortToPush);
-                await serializer.PushUnsignedIntAsync(uintToPush);
-                await serializer.PushLongAsync(longToPush);
-                await serializer.PushUnsignedLongAsync(ulongToPush);
-                await serializer.PushFloatAsync(floatToPush);
-                await serializer.PushDoubleAsync(doubleToPush);
-                await serializer.FlushAsync();
+                serializer.PushInt(intToPush);
+                serializer.PushBool(boolToPush);
+                serializer.PushShort(shortToPush);
+                serializer.PushString(stringToPush);
+                serializer.PushByte(byteToPush);
+                serializer.PushUnsignedShort(ushortToPush);
+                serializer.PushUnsignedInt(uintToPush);
+                serializer.PushLong(longToPush);
+                serializer.PushUnsignedLong(ulongToPush);
+                serializer.PushFloat(floatToPush);
+                serializer.PushDouble(doubleToPush);
+                serializer.Flush();
                 
                 serializedStream = stream.ToArray();
             }
@@ -154,17 +154,17 @@ namespace BigObjectSerializer.Test
             using (var stream = new MemoryStream(serializedStream))
             using (var deserializer = new BigObjectDeserializer(stream))
             {
-                var intVal = await deserializer.PopIntAsync();
-                var boolVal = await deserializer.PopBoolAsync();
-                var shortVal = await deserializer.PopShortAsync();
-                var stringVal = await deserializer.PopStringAsync();
-                var byteVal = await deserializer.PopByteAsync();
-                var ushortVal = await deserializer.PopUnsignedShortAsync();
-                var uintVal = await deserializer.PopUnsignedIntAsync();
-                var longVal = await deserializer.PopLongAsync();
-                var ulongVal = await deserializer.PopUnsignedLongAsync();
-                var floatVal = await deserializer.PopFloatAsync();
-                var doubleVal = await deserializer.PopDoubleAsync();
+                var intVal = deserializer.PopInt();
+                var boolVal = deserializer.PopBool();
+                var shortVal = deserializer.PopShort();
+                var stringVal = deserializer.PopString();
+                var byteVal = deserializer.PopByte();
+                var ushortVal = deserializer.PopUnsignedShort();
+                var uintVal = deserializer.PopUnsignedInt();
+                var longVal = deserializer.PopLong();
+                var ulongVal = deserializer.PopUnsignedLong();
+                var floatVal = deserializer.PopFloat();
+                var doubleVal = deserializer.PopDouble();
 
                 Assert.Equal(intToPush, intVal);
                 Assert.Equal(boolToPush, boolVal);
@@ -207,8 +207,8 @@ namespace BigObjectSerializer.Test
             using (var stream = new MemoryStream())
             using (var serializer = new BigObjectSerializer(stream))
             {
-                await serializer.PushObjectAsync(basicPoco);
-                await serializer.FlushAsync();
+                serializer.PushObject(basicPoco);
+                serializer.Flush();
 
                 serializedStream = stream.ToArray();
             }
@@ -216,7 +216,7 @@ namespace BigObjectSerializer.Test
             using (var stream = new MemoryStream(serializedStream))
             using (var deserializer = new BigObjectDeserializer(stream))
             {
-                var deserializedBasicPoco = await deserializer.PopObjectAsync<BasicPoco>();
+                var deserializedBasicPoco = deserializer.PopObject<BasicPoco>();
 
                 Assert.Equal(basicPoco.NullStringValue, deserializedBasicPoco.NullStringValue);
                 Assert.True(basicPoco.IntValues.SequenceEqual(deserializedBasicPoco.IntValues));
@@ -260,8 +260,8 @@ namespace BigObjectSerializer.Test
             using (var stream = File.Open("test.bin", FileMode.Create))
             using (var serializer = new BigObjectSerializer(stream))
             {
-                await serializer.PushObjectAsync(basicPoco);
-                await serializer.FlushAsync();
+                serializer.PushObject(basicPoco);
+                serializer.Flush();
             }
 
             await Task.Delay(1000); // Give time to release control of file
@@ -269,7 +269,7 @@ namespace BigObjectSerializer.Test
             using (var stream = File.Open("test.bin", FileMode.Open))
             using (var deserializer = new BigObjectDeserializer(stream))
             {
-                var deserializedBasicPoco = await deserializer.PopObjectAsync<BasicPoco>();
+                var deserializedBasicPoco = deserializer.PopObject<BasicPoco>();
 
                 Assert.Equal(basicPoco.NullStringValue, deserializedBasicPoco.NullStringValue);
                 Assert.True(basicPoco.IntValues.SequenceEqual(deserializedBasicPoco.IntValues));
@@ -321,8 +321,8 @@ namespace BigObjectSerializer.Test
             using (var stream = new MemoryStream())
             using (var serializer = new BigObjectSerializer(stream))
             {
-                await serializer.PushObjectAsync(poco);
-                await serializer.FlushAsync();
+                serializer.PushObject(poco);
+                serializer.Flush();
 
                 serializedStream = stream.ToArray();
             }
@@ -330,7 +330,7 @@ namespace BigObjectSerializer.Test
             using (var stream = new MemoryStream(serializedStream))
             using (var deserializer = new BigObjectDeserializer(stream))
             {
-                var deserializedBasicPoco = await deserializer.PopObjectAsync<Poco>();
+                var deserializedBasicPoco = deserializer.PopObject<Poco>();
 
                 Assert.True(poco.StringEnumerableValues.SequenceEqual(deserializedBasicPoco.StringEnumerableValues));
                 Assert.Equal(poco.IntValue, deserializedBasicPoco.IntValue);

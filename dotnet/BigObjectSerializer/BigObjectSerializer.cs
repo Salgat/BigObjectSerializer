@@ -16,7 +16,7 @@ namespace BigObjectSerializer
         private int _activeBuffer = 0;
         private int _activeBufferPosition = 0;
         private readonly IList<byte[]> _buffers;
-        private Func<ReadOnlyMemory<byte>, CancellationToken, Task> _flushCallback;
+        private Action<ReadOnlyMemory<byte>> _flushCallback;
         private Task _pendingFlush = Task.CompletedTask;
         private readonly int _bufferSize;
         private const int LargestBufferObject = 8; // 8 bytes (long - 64 bits)
@@ -28,25 +28,26 @@ namespace BigObjectSerializer
         private ulong[] _ulongBuffer = new[] { 0UL };
 
         // Reflection
-        private static readonly IImmutableDictionary<Type, MethodInfo> _basicTypePushMethods;
+        private readonly IDictionary<Type, IImmutableList<PropertyInfo>> _propertiesByType = new Dictionary<Type, IImmutableList<PropertyInfo>>();
+        private static readonly IImmutableDictionary<Type, Action<BigObjectSerializer, object>> _basicTypePushMethods;
         private static readonly IImmutableSet<Type> _pushValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
 
         static BigObjectSerializer()
         {
-            var pushMethods = new Dictionary<Type, MethodInfo>
+            var pushMethods = new Dictionary<Type, Action<BigObjectSerializer, object>>
             {
-                [typeof(int)] = typeof(BigObjectSerializer).GetMethod(nameof(PushIntAsync)),
-                [typeof(uint)] = typeof(BigObjectSerializer).GetMethod(nameof(PushUnsignedIntAsync)),
-                [typeof(short)] = typeof(BigObjectSerializer).GetMethod(nameof(PushShortAsync)),
-                [typeof(ushort)] = typeof(BigObjectSerializer).GetMethod(nameof(PushUnsignedShortAsync)),
-                [typeof(long)] = typeof(BigObjectSerializer).GetMethod(nameof(PushLongAsync)),
-                [typeof(ulong)] = typeof(BigObjectSerializer).GetMethod(nameof(PushUnsignedLongAsync)),
-                [typeof(byte)] = typeof(BigObjectSerializer).GetMethod(nameof(PushByteAsync)),
-                [typeof(bool)] = typeof(BigObjectSerializer).GetMethod(nameof(PushBoolAsync)),
-                [typeof(float)] = typeof(BigObjectSerializer).GetMethod(nameof(PushFloatAsync)),
-                [typeof(double)] = typeof(BigObjectSerializer).GetMethod(nameof(PushDoubleAsync)),
-                [typeof(string)] = typeof(BigObjectSerializer).GetMethod(nameof(PushStringAsync)),
-                [typeof(Guid)] = typeof(BigObjectSerializer).GetMethod(nameof(PushGuidAsync))
+                [typeof(int)] = (instance, val) => instance.PushInt((int)val),
+                [typeof(uint)] = (instance, val) => instance.PushUnsignedInt((uint)val),
+                [typeof(short)] = (instance, val) => instance.PushShort((short)val),
+                [typeof(ushort)] = (instance, val) => instance.PushUnsignedShort((ushort)val),
+                [typeof(long)] = (instance, val) => instance.PushLong((long)val),
+                [typeof(ulong)] = (instance, val) => instance.PushUnsignedLong((ulong)val),
+                [typeof(byte)] = (instance, val) => instance.PushByte((byte)val),
+                [typeof(bool)] = (instance, val) => instance.PushBool((bool)val),
+                [typeof(float)] = (instance, val) => instance.PushFloat((float)val),
+                [typeof(double)] = (instance, val) => instance.PushDouble((double)val),
+                [typeof(string)] = (instance, val) => instance.PushString((string)val),
+                [typeof(Guid)] = (instance, val) => instance.PushGuid((Guid)val),
             };
             _basicTypePushMethods = pushMethods.ToImmutableDictionary();
 
@@ -58,7 +59,7 @@ namespace BigObjectSerializer
             _pushValueTypes = pushValueTypes.ToImmutableHashSet();
         }
 
-        public BigObjectSerializer(Func<ReadOnlyMemory<byte>, CancellationToken, Task> writeFunc, int bufferSize = 10000000)
+        public BigObjectSerializer(Action<ReadOnlyMemory<byte>> writeFunc, int bufferSize = 10000000)
         {
             _bufferSize = bufferSize;
             _buffers = new List<byte[]>()
@@ -77,16 +78,16 @@ namespace BigObjectSerializer
                 new byte[bufferSize],
                 new byte[bufferSize]
             };
-            _flushCallback = async (valuesToWrite, cancellationToken) =>
+            _flushCallback = (valuesToWrite) =>
             {
-                await outputStream.WriteAsync(valuesToWrite.ToArray(), 0, valuesToWrite.Length, cancellationToken).ConfigureAwait(false);
-                await outputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                outputStream.Write(valuesToWrite.ToArray(), 0, valuesToWrite.Length);
+                outputStream.Flush();
             };
         }
 
         #region Configuration
 
-        public BigObjectSerializer AddFlushCallback(Func<ReadOnlyMemory<byte>, CancellationToken, Task> callback)
+        public BigObjectSerializer AddFlushCallback(Action<ReadOnlyMemory<byte>> callback)
         {
             if (_flushCallback != null)
             {
@@ -100,8 +101,8 @@ namespace BigObjectSerializer
 
         #region Push
 
-        public Task FlushAsync()
-            => FlushAsync(true);
+        public void Flush()
+            => Flush(true);
 
         /// <summary>
         /// Returns true if there is not enough room to fit the largest buffer object.
@@ -118,19 +119,14 @@ namespace BigObjectSerializer
         private bool IsFlushRequired(int count)
             => _bufferSize - _activeBufferPosition < count;
 
-        private async Task FlushAsync(bool blockingFlush = false)
-        {
-            // No room for largest object left, flush current contents
-            await _pendingFlush.ConfigureAwait(false); // Wait for pending flush to finish if it hasn't
-                    
+        private void Flush(bool blockingFlush = false)
+        {   
             var memorySpan = new ReadOnlyMemory<byte>(_buffers[_activeBuffer], 0, _activeBufferPosition);
-            _pendingFlush = Task.Run(() => _flushCallback(memorySpan, CancellationToken.None));
+            _flushCallback(memorySpan);
 
             // Swap buffers to allow new buffer to fill up while flush is occurring
             _activeBuffer = _activeBuffer == 0 ? 1 : 0;
             _activeBufferPosition = 0;
-
-            if (blockingFlush) await _pendingFlush.ConfigureAwait(false);
         }
 
         private void WriteValue(ulong data, int count, byte[] target, int offset)
@@ -146,26 +142,26 @@ namespace BigObjectSerializer
             }
         }
 
-        private async Task WriteAndFlushIfRequireAsync(ulong data, int count)
+        private void WriteAndFlushIfRequire(ulong data, int count)
         {
-            if (IsFlushRequired()) await FlushAsync(false).ConfigureAwait(false);
+            if (IsFlushRequired()) Flush(false);
             WriteValue(data, count, _buffers[_activeBuffer], _activeBufferPosition);
             _activeBufferPosition += count;
         }
         
-        private async Task WriteByteAndFlushIfRequireAsync(byte data)
+        private void WriteByteAndFlushIfRequire(byte data)
         {
-            if (IsFlushRequired(1)) await FlushAsync(false).ConfigureAwait(false);
+            if (IsFlushRequired(1)) Flush(false);
             _buffers[_activeBuffer][_activeBufferPosition] = data;
             ++_activeBufferPosition;
         }
 
-        private async Task WriteBytesAndFlushIfRequired(byte[] data)
+        private void WriteBytesAndFlushIfRequired(byte[] data)
         {
             var dataPosition = 0;
             while (true)
             {
-                if (_bufferSize <= _activeBufferPosition) await FlushAsync(false).ConfigureAwait(false);
+                if (_bufferSize <= _activeBufferPosition) Flush(false);
 
                 var bytesRemainingInBuffer = _bufferSize - _activeBufferPosition;
                 var bytesRemainingInData = data.Length - dataPosition;
@@ -178,65 +174,65 @@ namespace BigObjectSerializer
             }
         }
 
-        public async Task PushStringAsync(string value)
+        public void PushString(string value)
         {
-            await PushIntAsync(value.Length).ConfigureAwait(false); // First int stores length of string
+            PushInt(value.Length); // First int stores length of string
             if (value.Length == 0) return;
-            await WriteBytesAndFlushIfRequired(Encoding.UTF8.GetBytes(value)).ConfigureAwait(false);
+            WriteBytesAndFlushIfRequired(Encoding.UTF8.GetBytes(value));
         }
 
-        public Task PushIntAsync(int value)
-            => WriteAndFlushIfRequireAsync((ulong)value, sizeof(int));
+        public void PushInt(int value)
+            => WriteAndFlushIfRequire((ulong)value, sizeof(int));
 
-        public Task PushUnsignedIntAsync(uint value)
-            => WriteAndFlushIfRequireAsync((ulong)value, sizeof(uint));
+        public void PushUnsignedInt(uint value)
+            => WriteAndFlushIfRequire((ulong)value, sizeof(uint));
 
-        public Task PushShortAsync(short value)
-            => WriteAndFlushIfRequireAsync((ulong)value, sizeof(short));
+        public void PushShort(short value)
+            => WriteAndFlushIfRequire((ulong)value, sizeof(short));
 
-        public Task PushUnsignedShortAsync(ushort value)
-            => WriteAndFlushIfRequireAsync((ulong)value, sizeof(ushort));
+        public void PushUnsignedShort(ushort value)
+            => WriteAndFlushIfRequire((ulong)value, sizeof(ushort));
 
-        public Task PushLongAsync(long value)
-            => WriteAndFlushIfRequireAsync((ulong)value, sizeof(long));
+        public void PushLong(long value)
+            => WriteAndFlushIfRequire((ulong)value, sizeof(long));
 
-        public Task PushUnsignedLongAsync(ulong value)
-            => WriteAndFlushIfRequireAsync((ulong)value, sizeof(ulong));
+        public void PushUnsignedLong(ulong value)
+            => WriteAndFlushIfRequire((ulong)value, sizeof(ulong));
 
-        public Task PushByteAsync(byte value)
-            => WriteByteAndFlushIfRequireAsync(value);
+        public void PushByte(byte value)
+            => WriteByteAndFlushIfRequire(value);
 
-        public Task PushBoolAsync(bool value)
-            => WriteByteAndFlushIfRequireAsync(value ? (byte)0x1 : (byte)0x0);
+        public void PushBool(bool value)
+            => WriteByteAndFlushIfRequire(value ? (byte)0x1 : (byte)0x0);
 
-        public async Task PushFloatAsync(float value)
+        public void PushFloat(float value)
         {
             _floatBuffer[0] = value;
             Buffer.BlockCopy(_floatBuffer, 0, _intBuffer, 0, sizeof(float));
-            await WriteAndFlushIfRequireAsync((ulong)_intBuffer[0], sizeof(float)).ConfigureAwait(false);
+            WriteAndFlushIfRequire((ulong)_intBuffer[0], sizeof(float));
         }
 
-        public async Task PushDoubleAsync(double value)
+        public void PushDouble(double value)
         {
             _doubleBuffer[0] = value;
             Buffer.BlockCopy(_doubleBuffer, 0, _ulongBuffer, 0, sizeof(double));
-            await WriteAndFlushIfRequireAsync((ulong)_ulongBuffer[0], sizeof(double)).ConfigureAwait(false);
+            WriteAndFlushIfRequire((ulong)_ulongBuffer[0], sizeof(double));
         }
 
-        public Task PushGuidAsync(Guid value)
-            => PushStringAsync(value.ToString());
+        public void PushGuid(Guid value)
+            => PushString(value.ToString());
 
         #endregion
 
         #region Reflective Push
 
-        public Task PushObjectAsync<T>(T value, int maxDepth = 10) where T : new()
-            => PushObjectAsync(value, typeof(T), 1, maxDepth);
+        public void PushObject<T>(T value, int maxDepth = 10) where T : new()
+            => PushObject(value, typeof(T), 1, maxDepth);
 
-        public Task PushObjectAsync(object value, Type type, int maxDepth = 10)
-            => PushObjectAsync(value, type, 1, maxDepth);
+        public void PushObject(object value, Type type, int maxDepth = 10)
+            => PushObject(value, type, 1, maxDepth);
 
-        private async Task PushObjectAsync(object value, Type type, int depth, int maxDepth)
+        private void PushObject(object value, Type type, int depth, int maxDepth)
         {
             if (depth > maxDepth) return; // Ignore properties past max depth
 
@@ -245,57 +241,68 @@ namespace BigObjectSerializer
             {
                 if (value is null)
                 {
-                    await PushByteAsync(0x0).ConfigureAwait(false);
+                    PushByte(0x0);
                 }
                 else
                 {
-                    await PushByteAsync(0x1).ConfigureAwait(false);
+                    PushByte(0x1);
                 }
             }
-
-            var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance).ToList();
-
+            
             var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
             if (_pushValueTypes.Contains(typeWithoutGenerics)) // Might be better to instead check if it's one of the types directly serializable
             {
                 // Raw value to push
-                await PushValueAsync(value, type, depth + 1, maxDepth).ConfigureAwait(false);
+                PushValue(value, type, depth + 1, maxDepth);
                 return;
             }
             else if (typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics))
             {
-                await PushKeyValuePairAsync(value, type, depth + 1, maxDepth).ConfigureAwait(false);
+                PushKeyValuePair(value, type, depth + 1, maxDepth);
                 return;
             }
             
-            foreach (var property in properties.Where(p => p.CanRead && p.CanWrite)) // For now we only consider properties with getter/setter
+            foreach (var property in GetPropertiesToGet(type)) // For now we only consider properties with getter/setter
             {
                 var propertyType = property.PropertyType;
                 var name = property.Name;
                 var propertyValue = property.GetValue(value);
 
-                await PushStringAsync(name).ConfigureAwait(false); // Property name is pushed first to help deserialization handle extra or out of order properties changed after serialization
+                PushString(name); // Property name is pushed first to help deserialization handle extra or out of order properties changed after serialization
 
                 if (propertyValue == null)
                 {
                     // Null values are marked with byte value 0x00 and skipped
-                    await PushByteAsync(0x0).ConfigureAwait(false);
+                    PushByte(0x0);
                     continue;
                 }
                 else
                 {
-                    await PushByteAsync(0x1).ConfigureAwait(false);
+                    PushByte(0x1);
                 }
-                await PushValueAsync(propertyValue, propertyType, depth + 1, maxDepth).ConfigureAwait(false);
+                PushValue(propertyValue, propertyType, depth + 1, maxDepth);
             }
-            await PushStringAsync(string.Empty).ConfigureAwait(false); // Mark end of object (since no property can have an empty string label)
+            PushString(string.Empty); // Mark end of object (since no property can have an empty string label)
         }
 
-        private async Task PushValueAsync(object value, Type type, int depth, int maxDepth)
+        private IImmutableList<PropertyInfo> GetPropertiesToGet(Type type)
         {
-            if (await TryPushBasicTypeAsync(value, type).ConfigureAwait(false))
+            if (_propertiesByType.ContainsKey(type))
+            {
+                return _propertiesByType[type];
+            }
+            return _propertiesByType[type] = type
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => p.CanRead && p.CanWrite)
+                .ToImmutableList();
+        }
+
+        private void PushValue(object value, Type type, int depth, int maxDepth)
+        {
+            if (_basicTypePushMethods.ContainsKey(type))
             {
                 // Property was basic supported type and was pushed
+                _basicTypePushMethods[type].Invoke(this, value);
                 return;
             }
             else if (type.IsArray || typeof(IEnumerable).IsAssignableFrom(type))
@@ -304,49 +311,33 @@ namespace BigObjectSerializer
                 var genericType = Utilities.GetElementType(type);
                 var enumerable = ((IEnumerable)value).OfType<object>();
 
-                await PushIntAsync(enumerable.Count()).ConfigureAwait(false); // Store the length of the enumerable
+                PushInt(enumerable.Count()); // Store the length of the enumerable
                 foreach (var entry in enumerable)
                 {
-                    await PushObjectAsync(entry, genericType, depth + 1, maxDepth).ConfigureAwait(false);
+                    PushObject(entry, genericType, depth + 1, maxDepth);
                 }
             }
             else if (type.IsClass) // TODO: Handle structs
             {
-                await PushObjectAsync(value, type, depth + 1, maxDepth).ConfigureAwait(false);
+                PushObject(value, type, depth + 1, maxDepth);
             }
             else
             {
-                throw new NotImplementedException($"{nameof(PushObjectAsync)} does not support serializing type of {type.FullName}");
+                throw new NotImplementedException($"{nameof(PushObject)} does not support serializing type of {type.FullName}");
             }
         }
 
-        private async Task PushKeyValuePairAsync(object value, Type type, int depth, int maxDepth)
+        private void PushKeyValuePair(object value, Type type, int depth, int maxDepth)
         {
             // KeyValuePair is pushed as the key then value
             var properties = type.GetProperties();
             var kvKey = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Key));
             var kvValue = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Value));
 
-            await PushObjectAsync(kvKey.GetValue(value), kvKey.PropertyType, depth + 1, maxDepth).ConfigureAwait(false);
-            await PushObjectAsync(kvValue.GetValue(value), kvValue.PropertyType, depth + 1, maxDepth).ConfigureAwait(false);
+            PushObject(kvKey.GetValue(value), kvKey.PropertyType, depth + 1, maxDepth);
+            PushObject(kvValue.GetValue(value), kvValue.PropertyType, depth + 1, maxDepth);
         }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <typeparam name="T"></typeparam>
-        /// <param name="value"></param>
-        /// <returns>True if value was a basic type pushed.</returns>
-        private async Task<bool> TryPushBasicTypeAsync(object value, Type type)
-        {
-            if (_basicTypePushMethods.ContainsKey(type))
-            {
-                await ((Task)_basicTypePushMethods[type].Invoke(this, new[] { value })).ConfigureAwait(false);
-                return true;
-            }
-            return false;
-        }
-
+        
         #endregion
 
         public void Dispose()
