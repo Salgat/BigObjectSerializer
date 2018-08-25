@@ -13,8 +13,6 @@ namespace BigObjectSerializer
 {
     public class BigObjectDeserializer : IDisposable
     {
-        private static int Counter = 0;
-
         private Action<byte[], int> _readFunc;
         private readonly byte[] _inputBuffer = new byte[8*1000000];
         private readonly byte[] _inputBufferOld = new byte[LargestBufferObject]; // This holds the last 8 bytes of the old buffer
@@ -31,9 +29,9 @@ namespace BigObjectSerializer
 
         // Reflection
         private readonly IDictionary<Type, IImmutableDictionary<string, PropertyInfo>> _propertiesByType = new Dictionary<Type, IImmutableDictionary<string, PropertyInfo>>();
-        private static readonly IImmutableDictionary<Type, MethodInfo> _basicTypePopMethods; // Types that directly map to basic Pop Methods (such as PopInt)
+        private readonly IImmutableDictionary<Type, Func<object>> _basicTypePopMethods; // Types that directly map to basic Pop Methods (such as PopInt)
         private static readonly IImmutableDictionary<Type, PropertyInfo> _basicTypeGenericTaskResult; // Types that directly map to basic Pop Methods (such as PopInt)
-        private static readonly IImmutableSet<Type> _popValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
+        private readonly IImmutableSet<Type> _popValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
         private readonly IDictionary<Type, ConstructorInfo> _keyValueConstructors = new Dictionary<Type, ConstructorInfo>();
         private readonly IDictionary<Type, Type[]> _genericArguments = new Dictionary<Type, Type[]>();
         private readonly IDictionary<Type, Type> _makeGenericTypeDictionary = new Dictionary<Type, Type>();
@@ -41,37 +39,14 @@ namespace BigObjectSerializer
 
         static BigObjectDeserializer()
         {
-            var popMethods = new Dictionary<Type, MethodInfo>
-            {
-                [typeof(int)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopInt)),
-                [typeof(uint)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopUnsignedInt)),
-                [typeof(short)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopShort)),
-                [typeof(ushort)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopUnsignedShort)),
-                [typeof(long)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopLong)),
-                [typeof(ulong)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopUnsignedLong)),
-                [typeof(byte)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopByte)),
-                [typeof(bool)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopBool)),
-                [typeof(float)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopFloat)),
-                [typeof(double)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopDouble)),
-                [typeof(string)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopString)),
-                [typeof(Guid)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopGuid))
-            };
-            _basicTypePopMethods = popMethods.ToImmutableDictionary();
-            
-            var popValueTypes = popMethods.Select(kv => kv.Key).ToList();
-            popValueTypes.Add(typeof(ISet<>));
-            popValueTypes.Add(typeof(IDictionary<,>));
-            popValueTypes.Add(typeof(IList<>));
-            popValueTypes.Add(typeof(IEnumerable<>));
-            _popValueTypes = popValueTypes.ToImmutableHashSet();
         }
         
-        public BigObjectDeserializer(Action<byte[], int> readFunc)
+        public BigObjectDeserializer(Action<byte[], int> readFunc) : this()
         {
             _readFunc = readFunc;
         }
 
-        public BigObjectDeserializer(Stream inputStream)
+        public BigObjectDeserializer(Stream inputStream) : this()
         {
             _readFunc = (inputBuffer, readCount) =>
             {
@@ -83,13 +58,37 @@ namespace BigObjectSerializer
             };
         }
 
+        private BigObjectDeserializer()
+        {
+            var popMethods = new Dictionary<Type, Func<object>>
+            {
+                [typeof(int)] = () => PopInt(),
+                [typeof(uint)] = () => PopUnsignedInt(),
+                [typeof(short)] = () => PopShort(),
+                [typeof(ushort)] = () => PopUnsignedShort(),
+                [typeof(long)] = () => PopLong(),
+                [typeof(ulong)] = () => PopUnsignedLong(),
+                [typeof(byte)] = () => PopByte(),
+                [typeof(bool)] = () => PopBool(),
+                [typeof(float)] = () => PopFloat(),
+                [typeof(double)] = () => PopDouble(),
+                [typeof(string)] = () => PopString(),
+                [typeof(Guid)] = () => PopGuid(),
+            };
+            _basicTypePopMethods = popMethods.ToImmutableDictionary();
+
+            var popValueTypes = popMethods.Select(kv => kv.Key).ToList();
+            popValueTypes.Add(typeof(ISet<>));
+            popValueTypes.Add(typeof(IDictionary<,>));
+            popValueTypes.Add(typeof(IList<>));
+            popValueTypes.Add(typeof(IEnumerable<>));
+            _popValueTypes = popValueTypes.ToImmutableHashSet();
+        }
+
         #region Pop
 
         private ulong Read(int count)
         {
-            ++Counter;
-            if (count > LargestBufferObject) throw new ArgumentException($"Cannot read larger than {LargestBufferObject} bytes at a time.");
-
             ulong result = 0;
 
             var inputBufferOffset = _inputBufferOffset;
@@ -303,7 +302,7 @@ namespace BigObjectSerializer
             if (_basicTypePopMethods.ContainsKey(type))
             {
                 // Property was basic supported type and was pushed
-                return _basicTypePopMethods[type].Invoke(this, _emptyArray);
+                return _basicTypePopMethods[type]();
             }
             else if (type.IsArray || typeof(IEnumerable).IsAssignableFrom(type))
             {
