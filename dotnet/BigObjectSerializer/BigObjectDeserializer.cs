@@ -30,6 +30,7 @@ namespace BigObjectSerializer
 
         // Reflection
         private static readonly IImmutableDictionary<Type, MethodInfo> _basicTypePopMethods; // Types that directly map to basic Pop Methods (such as PopIntAsync)
+        private static readonly IImmutableDictionary<Type, PropertyInfo> _basicTypeGenericTaskResult; // Types that directly map to basic Pop Methods (such as PopIntAsync)
         private static readonly IImmutableSet<Type> _popValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
 
         static BigObjectDeserializer()
@@ -50,6 +51,23 @@ namespace BigObjectSerializer
                 [typeof(Guid)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopGuidAsync))
             };
             _basicTypePopMethods = popMethods.ToImmutableDictionary();
+            
+            var genericTaskResults = new Dictionary<Type, PropertyInfo>
+            {
+                [typeof(int)] = typeof(Task<>).MakeGenericType(typeof(int)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(uint)] = typeof(Task<>).MakeGenericType(typeof(uint)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(short)] = typeof(Task<>).MakeGenericType(typeof(short)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(ushort)] = typeof(Task<>).MakeGenericType(typeof(ushort)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(long)] = typeof(Task<>).MakeGenericType(typeof(long)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(ulong)] = typeof(Task<>).MakeGenericType(typeof(ulong)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(byte)] = typeof(Task<>).MakeGenericType(typeof(byte)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(bool)] = typeof(Task<>).MakeGenericType(typeof(bool)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(float)] = typeof(Task<>).MakeGenericType(typeof(float)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(double)] = typeof(Task<>).MakeGenericType(typeof(double)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(string)] = typeof(Task<>).MakeGenericType(typeof(string)).GetProperty(nameof(Task<object>.Result)),
+                [typeof(Guid)] = typeof(Task<>).MakeGenericType(typeof(Guid)).GetProperty(nameof(Task<object>.Result))
+            };
+            _basicTypeGenericTaskResult = genericTaskResults.ToImmutableDictionary();
 
             var popValueTypes = popMethods.Select(kv => kv.Key).ToList();
             popValueTypes.Add(typeof(ISet<>));
@@ -371,8 +389,7 @@ namespace BigObjectSerializer
             {
                 var task = (Task)_basicTypePopMethods[type].Invoke(this, new object[0]);
                 await task.ConfigureAwait(false);
-                var resultProperty = typeof(Task<>).MakeGenericType(type).GetProperty(nameof(Task<object>.Result));
-                return (true, resultProperty.GetValue(task));
+                return (true, _basicTypeGenericTaskResult[type].GetValue(task));
             }
             return (false, null);
         }
