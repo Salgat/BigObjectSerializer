@@ -1,3 +1,4 @@
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -22,13 +23,10 @@ namespace BigObjectSerializer.Test
         {
             get
             {
-                const int maxValue = 1000000;
-                var theoryData = new TheoryData<int>();
-                for (var i = 1; i <= maxValue; i *= 10)
+                return new TheoryData<int>()
                 {
-                    theoryData.Add(i);
-                }
-                return theoryData;
+                    1, 100, 10000, 1000000, 5000000
+                };
             }
         }
 
@@ -68,8 +66,29 @@ namespace BigObjectSerializer.Test
                 deserializedBenchmarkPoco = await deserializer.PopObjectAsync<BenchmarkPoco>();
             }
             var deserializationDuration = timer.ElapsedMilliseconds;
-            
+
+            // JSON comparison
+            using (var fileStream = new FileStream("test.json", FileMode.Create))
+            using (var writer = new StreamWriter(fileStream))
+            using (var jsonWriter = new JsonTextWriter(writer))
+            {
+                var ser = new JsonSerializer();
+                ser.Serialize(jsonWriter, benchmarkPoco);
+                jsonWriter.Flush();
+            }
+            var serializationDurationJson = timer.ElapsedMilliseconds;
+
+            using (var fileStream = File.Open("test.json", FileMode.Open))
+            using (var reader = new StreamReader(fileStream))
+            using (var jsonReader = new JsonTextReader(reader))
+            {
+                var ser = new JsonSerializer();
+                ser.Deserialize<BenchmarkPoco>(jsonReader);
+            }
+            var deserializationDurationJson = timer.ElapsedMilliseconds;
+
             _output.WriteLine($"Serialization: {TimeSpan.FromMilliseconds(serializationDuration).TotalSeconds}s, Deserialization: {TimeSpan.FromMilliseconds(deserializationDuration - delayDuration).TotalSeconds}s");
+            _output.WriteLine($"Serialization Json: {TimeSpan.FromMilliseconds(serializationDurationJson - deserializationDuration).TotalSeconds}s, Deserialization: {TimeSpan.FromMilliseconds(deserializationDurationJson - serializationDurationJson).TotalSeconds}s");
         }
 
         [Fact]
