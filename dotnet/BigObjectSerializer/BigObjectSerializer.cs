@@ -13,13 +13,7 @@ namespace BigObjectSerializer
 {
     public class BigObjectSerializer : IDisposable
     {
-        private int _activeBuffer = 0;
-        private int _activeBufferPosition = 0;
-        private readonly IList<byte[]> _buffers;
-        private Action<ReadOnlyMemory<byte>> _flushCallback;
-        private Task _pendingFlush = Task.CompletedTask;
-        private readonly int _bufferSize;
-        private const int LargestBufferObject = 8; // 8 bytes (long - 64 bits)
+        private readonly Stream _stream;
 
         // Safely copying byte contents of float and double derived from https://github.com/google/flatbuffers/blob/master/net/FlatBuffers/ByteBuffer.cs
         private float[] _floatBuffer = new[] { 0.0f };
@@ -58,165 +52,82 @@ namespace BigObjectSerializer
             pushValueTypes.Add(typeof(IEnumerable<>));
             _pushValueTypes = pushValueTypes.ToImmutableHashSet();
         }
-
-        public BigObjectSerializer(Action<ReadOnlyMemory<byte>> writeFunc, int bufferSize = 10000000)
+        
+        public BigObjectSerializer(Stream outputStream)
         {
-            _bufferSize = bufferSize;
-            _buffers = new List<byte[]>()
-            {
-                new byte[bufferSize],
-                new byte[bufferSize]
-            };
-            _flushCallback = writeFunc;
+            _stream = outputStream;
         }
-
-        public BigObjectSerializer(Stream outputStream, int bufferSize = 10000000)
-        {
-            _bufferSize = bufferSize;
-            _buffers = new List<byte[]>()
-            {
-                new byte[bufferSize],
-                new byte[bufferSize]
-            };
-            _flushCallback = (valuesToWrite) =>
-            {
-                outputStream.Write(valuesToWrite.ToArray(), 0, valuesToWrite.Length);
-                outputStream.Flush();
-            };
-        }
-
-        #region Configuration
-
-        public BigObjectSerializer AddFlushCallback(Action<ReadOnlyMemory<byte>> callback)
-        {
-            if (_flushCallback != null)
-            {
-                throw new ArgumentException("Flush callback already added.");
-            }
-            _flushCallback = callback;
-            return this;
-        }
-
-        #endregion
-
+        
         #region Push
 
         public void Flush()
-            => Flush(true);
+            => _stream.Flush();
 
-        /// <summary>
-        /// Returns true if there is not enough room to fit the largest buffer object.
-        /// </summary>
-        /// <returns></returns>
-        private bool IsFlushRequired()
-            => _bufferSize - _activeBufferPosition < LargestBufferObject;
+        public Task FlushAsync()
+            => _stream.FlushAsync();
 
-        /// <summary>
-        /// Returns true if there is not enough room to fit the given count in the buffer.
-        /// </summary>
-        /// <param name="count"></param>
-        /// <returns></returns>
-        private bool IsFlushRequired(int count)
-            => _bufferSize - _activeBufferPosition < count;
-
-        private void Flush(bool blockingFlush = false)
-        {   
-            var memorySpan = new ReadOnlyMemory<byte>(_buffers[_activeBuffer], 0, _activeBufferPosition);
-            _flushCallback(memorySpan);
-
-            // Swap buffers to allow new buffer to fill up while flush is occurring
-            _activeBuffer = _activeBuffer == 0 ? 1 : 0;
-            _activeBufferPosition = 0;
-        }
-
-        private void WriteValue(ulong data, int count, byte[] target, int offset)
+        private void WriteValue(ulong data, int count)
         {
-            if (count > LargestBufferObject)
-            {
-                throw new ArgumentException($"Values to write to buffer cannot be larger than {LargestBufferObject} in bytes.");
-            }
-            
             for (var i = 0; i < count; ++i)
             {
-                target[offset + i] = (byte)(data >> i * 8);
+                _stream.WriteByte((byte)(data >> i * 8));
             }
-        }
-
-        private void WriteAndFlushIfRequire(ulong data, int count)
-        {
-            if (IsFlushRequired()) Flush(false);
-            WriteValue(data, count, _buffers[_activeBuffer], _activeBufferPosition);
-            _activeBufferPosition += count;
         }
         
-        private void WriteByteAndFlushIfRequire(byte data)
+        private void WriteByte(byte data)
         {
-            if (IsFlushRequired(1)) Flush(false);
-            _buffers[_activeBuffer][_activeBufferPosition] = data;
-            ++_activeBufferPosition;
+            _stream.WriteByte(data);
         }
 
-        private void WriteBytesAndFlushIfRequired(byte[] data)
+        private void WriteBytes(byte[] data)
         {
             var dataPosition = 0;
-            while (true)
-            {
-                if (_bufferSize <= _activeBufferPosition) Flush(false);
-
-                var bytesRemainingInBuffer = _bufferSize - _activeBufferPosition;
-                var bytesRemainingInData = data.Length - dataPosition;
-                var bytesToWrite = bytesRemainingInBuffer > bytesRemainingInData ? bytesRemainingInData : bytesRemainingInBuffer;
-
-                Buffer.BlockCopy(data, dataPosition, _buffers[_activeBuffer], _activeBufferPosition, bytesToWrite);
-                _activeBufferPosition += bytesToWrite;
-                dataPosition += bytesToWrite;
-                if (dataPosition >= data.Length) return;
-            }
+            _stream.Write(data, 0, data.Length);
         }
 
         public void PushString(string value)
         {
             PushInt(value.Length); // First int stores length of string
             if (value.Length == 0) return;
-            WriteBytesAndFlushIfRequired(Encoding.UTF8.GetBytes(value));
+            WriteBytes(Encoding.UTF8.GetBytes(value));
         }
 
         public void PushInt(int value)
-            => WriteAndFlushIfRequire((ulong)value, sizeof(int));
+            => WriteValue((ulong)value, sizeof(int));
 
         public void PushUnsignedInt(uint value)
-            => WriteAndFlushIfRequire((ulong)value, sizeof(uint));
+            => WriteValue((ulong)value, sizeof(uint));
 
         public void PushShort(short value)
-            => WriteAndFlushIfRequire((ulong)value, sizeof(short));
+            => WriteValue((ulong)value, sizeof(short));
 
         public void PushUnsignedShort(ushort value)
-            => WriteAndFlushIfRequire((ulong)value, sizeof(ushort));
+            => WriteValue((ulong)value, sizeof(ushort));
 
         public void PushLong(long value)
-            => WriteAndFlushIfRequire((ulong)value, sizeof(long));
+            => WriteValue((ulong)value, sizeof(long));
 
         public void PushUnsignedLong(ulong value)
-            => WriteAndFlushIfRequire((ulong)value, sizeof(ulong));
+            => WriteValue((ulong)value, sizeof(ulong));
 
         public void PushByte(byte value)
-            => WriteByteAndFlushIfRequire(value);
+            => WriteByte(value);
 
         public void PushBool(bool value)
-            => WriteByteAndFlushIfRequire(value ? (byte)0x1 : (byte)0x0);
+            => WriteByte(value ? (byte)0x1 : (byte)0x0);
 
         public void PushFloat(float value)
         {
             _floatBuffer[0] = value;
             Buffer.BlockCopy(_floatBuffer, 0, _intBuffer, 0, sizeof(float));
-            WriteAndFlushIfRequire((ulong)_intBuffer[0], sizeof(float));
+            WriteValue((ulong)_intBuffer[0], sizeof(float));
         }
 
         public void PushDouble(double value)
         {
             _doubleBuffer[0] = value;
             Buffer.BlockCopy(_doubleBuffer, 0, _ulongBuffer, 0, sizeof(double));
-            WriteAndFlushIfRequire((ulong)_ulongBuffer[0], sizeof(double));
+            WriteValue((ulong)_ulongBuffer[0], sizeof(double));
         }
 
         public void PushGuid(Guid value)
