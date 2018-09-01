@@ -236,15 +236,6 @@ namespace BigObjectSerializer
         private object PopObject(Type type, int depth, int maxDepth)
         {
             if (depth > maxDepth) return null; // Ignore properties past max depth
-
-            // Null check
-            if (type.IsClass)
-            {
-                if (PopByte() == 0x0)
-                {
-                    return null;
-                }
-            }
             
             var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
             if (_popValueTypes.Contains(typeWithoutGenerics))

@@ -152,11 +152,7 @@ namespace BigObjectSerializer
             {
                 if (value is null)
                 {
-                    PushByte(0x0);
-                }
-                else
-                {
-                    PushByte(0x1);
+                    return;
                 }
             }
             
