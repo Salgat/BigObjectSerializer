@@ -131,7 +131,7 @@ namespace BigObjectSerializer
         }
 
         public void PushGuid(Guid value)
-            => PushString(value.ToString());
+            => WriteBytes(value.ToByteArray());
 
         #endregion
 

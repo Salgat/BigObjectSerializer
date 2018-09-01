@@ -194,7 +194,7 @@ namespace BigObjectSerializer
         }
 
         public Guid PopGuid()
-            => new Guid(PopString());
+            => new Guid(PopBytes(16));
 
         public byte PopByte()
             => ReadByte();
