@@ -25,6 +25,8 @@ namespace BigObjectSerializer
         private readonly IDictionary<Type, IImmutableList<PropertyInfo>> _propertiesByType = new Dictionary<Type, IImmutableList<PropertyInfo>>();
         private static readonly IImmutableDictionary<Type, Action<BigObjectSerializer, object>> _basicTypePushMethods;
         private static readonly IImmutableSet<Type> _pushValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
+        // Describes the mapping of string to int for each property name. Is serialized in the first instance of a type that doesn't already have a serialized mapping.
+        private readonly IDictionary<Type, IImmutableDictionary<string, byte>> _propertyToIntMapping = new Dictionary<Type, IImmutableDictionary<string, byte>>(); // NOTE: Byte only allows up to 255 properties. Benchmark with short also
 
         static BigObjectSerializer()
         {
@@ -169,13 +171,19 @@ namespace BigObjectSerializer
                 return;
             }
             
+            if (GetPropertyNameMapping(type, out var propertyNameMappings))
+            {
+                PushObject(propertyNameMappings, typeof(IDictionary<string, byte>));
+            }
+
             foreach (var property in GetPropertiesToGet(type)) // For now we only consider properties with getter/setter
             {
                 var propertyType = property.PropertyType;
                 var name = property.Name;
                 var propertyValue = property.GetValue(value);
 
-                PushString(name); // Property name is pushed first to help deserialization handle extra or out of order properties changed after serialization
+                PushByte(propertyNameMappings[name]);
+                //PushString(name); // Property name is pushed first to help deserialization handle extra or out of order properties changed after serialization
 
                 if (propertyValue == null)
                 {
@@ -189,7 +197,7 @@ namespace BigObjectSerializer
                 }
                 PushValue(propertyValue, propertyType, depth + 1, maxDepth);
             }
-            PushString(string.Empty); // Mark end of object (since no property can have an empty string label)
+            PushByte(0); // Mark end of object (since no property can have an empty string label)
         }
 
         private IImmutableList<PropertyInfo> GetPropertiesToGet(Type type)
@@ -246,6 +254,33 @@ namespace BigObjectSerializer
         }
         
         #endregion
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="type"></param>
+        /// <param name="mapping"></param>
+        /// <returns>Returns true if the first time the type to map has appeared.</returns>
+        private bool GetPropertyNameMapping(Type type, out IImmutableDictionary<string, byte> mapping)
+        {
+            if (!_propertyToIntMapping.ContainsKey(type))
+            {
+                var newMapping = new Dictionary<string, byte>();
+                byte counter = 1; // 0 == end of object
+                var properties = GetPropertiesToGet(type);
+                foreach (var property in properties)
+                {
+                    newMapping[property.Name] = counter++;
+                }
+                _propertyToIntMapping[type] = newMapping.ToImmutableDictionary();
+
+                mapping = _propertyToIntMapping[type];
+                return true;
+            }
+
+            mapping = _propertyToIntMapping[type];
+            return false;
+        }
 
         public void Dispose()
         {

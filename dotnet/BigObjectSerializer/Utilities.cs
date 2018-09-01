@@ -14,6 +14,18 @@ namespace BigObjectSerializer
         private static readonly ConcurrentDictionary<(Type, Type), ConstructorInfo> _createFromEnumerableConstructor = new ConcurrentDictionary<(Type, Type), ConstructorInfo>();
         private static readonly ConcurrentDictionary<Type, Type> _getElementType = new ConcurrentDictionary<Type, Type>();
 
+        // https://stackoverflow.com/questions/22595655/how-to-do-a-dictionary-reverse-lookup
+        public static Dictionary<TValue, TKey> Reverse<TKey, TValue>(this IDictionary<TKey, TValue> source)
+        {
+            var dictionary = new Dictionary<TValue, TKey>();
+            foreach (var entry in source)
+            {
+                if (!dictionary.ContainsKey(entry.Value))
+                    dictionary.Add(entry.Value, entry.Key);
+            }
+            return dictionary;
+        }
+
         public static bool IsAssignableToGenericType(Type givenType, Type genericType)
         {
             var key = (givenType, genericType);

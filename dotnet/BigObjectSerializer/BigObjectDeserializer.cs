@@ -36,6 +36,7 @@ namespace BigObjectSerializer
         private readonly IDictionary<Type, Type[]> _genericArguments = new Dictionary<Type, Type[]>();
         private readonly IDictionary<Type, Type> _makeGenericTypeDictionary = new Dictionary<Type, Type>();
         private readonly IDictionary<Type, Type> _makeGenericTypeHashset = new Dictionary<Type, Type>();
+        private readonly IDictionary<Type, IImmutableDictionary<byte, string>> _propertyToByteMapping = new Dictionary<Type, IImmutableDictionary<byte, string>>();
 
         static BigObjectDeserializer()
         {
@@ -248,14 +249,17 @@ namespace BigObjectSerializer
                 return PopKeyValuePair(type, depth + 1, maxDepth);
             }
 
+            var mapping = GetPropertyToIntMapping(type);
+
             // Create and populate object
             var result = Activator.CreateInstance(type);
             var propertiesToSet = GetPropertiesToSet(type); // For now we only consider properties with getter/setter
             while (true)
             {
-                var propertyName = PopString();
-                if (propertyName == string.Empty) break; // End of object
+                var propertyByteId = PopByte();
+                if (propertyByteId == 0) break; // End of object
 
+                var propertyName = mapping[propertyByteId];
                 if (!propertiesToSet.ContainsKey(propertyName))
                 {
                     // We don't know how many values to pop, so we can't determine how to skip
@@ -274,6 +278,16 @@ namespace BigObjectSerializer
             }
 
             return result;
+        }
+
+        private IImmutableDictionary<byte, string> GetPropertyToIntMapping(Type type)
+        {
+            if (!_propertyToByteMapping.ContainsKey(type))
+            {
+                var mapping = ((IDictionary<string, byte>)PopObject(typeof(IDictionary<string, byte>))).Reverse();
+                _propertyToByteMapping[type] = mapping.ToImmutableDictionary();
+            }
+            return _propertyToByteMapping[type];
         }
 
         private IImmutableDictionary<string, PropertyInfo> GetPropertiesToSet(Type type)
