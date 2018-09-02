@@ -19,76 +19,87 @@ namespace BigObjectSerializer.Test
             _output = output;
         }
         
-        public static TheoryData<int> BenchmarkConfigurations
+        public static TheoryData<int, bool> BenchmarkConfigurations
         {
             get
             {
-                return new TheoryData<int>()
+                var theorySet = new TheoryData<int, bool>();
+                var sampleCounts = new List<int>()
                 {
-                    1, 100, 10000, 1000000, 5000000, 15000000
+                    1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000 //1000000, 5000000, 15000000
                 };
+                foreach (var sampleCount in sampleCounts)
+                {
+                    theorySet.Add(sampleCount, false);
+                    theorySet.Add(sampleCount, true);
+                }
+                return theorySet;
             }
         }
 
         [Theory(DisplayName = "Benchmarks"), MemberData(nameof(BenchmarkConfigurations))]
-        public async Task FileSerializationBenchmarks(int count)
+        public async Task FileSerializationBenchmarks(int sampleSize, bool useJson)
         {
             var random = new Random(0);
             var benchmarkPoco = new BenchmarkPoco()
             {
                 StringValue = "testString",
-                DictionaryValues = Enumerable.Range(0, count).ToDictionary(_ => Guid.NewGuid(), _ => new BenchmarkPoco2()
+                DictionaryValues = Enumerable.Range(0, sampleSize).ToDictionary(_ => Guid.NewGuid(), _ => new BenchmarkPoco2()
                 {
                     IntValue = random.Next(0, int.MaxValue),
                     StringValue = Guid.NewGuid().ToString(),
                     GuidValue = Guid.NewGuid()
                 }),
-                DoubleValues = Enumerable.Range(0, count).Select(_ => random.NextDouble() * double.MaxValue).ToList()
+                DoubleValues = Enumerable.Range(0, sampleSize).Select(_ => random.NextDouble() * double.MaxValue).ToList()
             };
             BenchmarkPoco deserializedBenchmarkPoco;
 
             var timer = new Stopwatch();
             timer.Start();
-            using (var stream = File.Open("test.bin", FileMode.Create))
-            using (var serializer = new BigObjectSerializer(stream))
+
+            if (!useJson)
             {
-                serializer.PushObject(benchmarkPoco);
-                serializer.Flush();
+                using (var stream = File.Open("test.bin", FileMode.Create))
+                using (var serializer = new BigObjectSerializer(stream))
+                {
+                    serializer.PushObject(benchmarkPoco);
+                    serializer.Flush();
+                }
+            }
+            else
+            {
+                using (var fileStream = new FileStream("test.json", FileMode.Create))
+                using (var writer = new StreamWriter(fileStream))
+                using (var jsonWriter = new JsonTextWriter(writer))
+                {
+                    var ser = new JsonSerializer();
+                    ser.Serialize(jsonWriter, benchmarkPoco);
+                    jsonWriter.Flush();
+                }
             }
             var serializationDuration = timer.ElapsedMilliseconds;
 
-            await Task.Delay(1000); // Give time to release control of file
-            var delayDuration = timer.ElapsedMilliseconds;
-
-            using (var stream = File.Open("test.bin", FileMode.Open))
-            using (var deserializer = new BigObjectDeserializer(stream))
+            if (!useJson)
             {
-                deserializedBenchmarkPoco = deserializer.PopObject<BenchmarkPoco>();
+                using (var stream = File.Open("test.bin", FileMode.Open))
+                using (var deserializer = new BigObjectDeserializer(stream))
+                {
+                    deserializedBenchmarkPoco = deserializer.PopObject<BenchmarkPoco>();
+                }
+            }
+            else
+            {
+                using (var fileStream = File.Open("test.json", FileMode.Open))
+                using (var reader = new StreamReader(fileStream))
+                using (var jsonReader = new JsonTextReader(reader))
+                {
+                    var ser = new JsonSerializer();
+                    ser.Deserialize<BenchmarkPoco>(jsonReader);
+                }
             }
             var deserializationDuration = timer.ElapsedMilliseconds;
 
-            // JSON comparison
-            using (var fileStream = new FileStream("test.json", FileMode.Create))
-            using (var writer = new StreamWriter(fileStream))
-            using (var jsonWriter = new JsonTextWriter(writer))
-            {
-                var ser = new JsonSerializer();
-                ser.Serialize(jsonWriter, benchmarkPoco);
-                jsonWriter.Flush();
-            }
-            var serializationDurationJson = timer.ElapsedMilliseconds;
-
-            using (var fileStream = File.Open("test.json", FileMode.Open))
-            using (var reader = new StreamReader(fileStream))
-            using (var jsonReader = new JsonTextReader(reader))
-            {
-                var ser = new JsonSerializer();
-                ser.Deserialize<BenchmarkPoco>(jsonReader);
-            }
-            var deserializationDurationJson = timer.ElapsedMilliseconds;
-
-            _output.WriteLine($"Serialization: {TimeSpan.FromMilliseconds(serializationDuration).TotalSeconds}s, Deserialization: {TimeSpan.FromMilliseconds(deserializationDuration - delayDuration).TotalSeconds}s");
-            _output.WriteLine($"Serialization Json: {TimeSpan.FromMilliseconds(serializationDurationJson - deserializationDuration).TotalSeconds}s, Deserialization: {TimeSpan.FromMilliseconds(deserializationDurationJson - serializationDurationJson).TotalSeconds}s");
+            _output.WriteLine($"Serialization: {TimeSpan.FromMilliseconds(serializationDuration).TotalSeconds}s, Deserialization: {TimeSpan.FromMilliseconds(deserializationDuration - serializationDuration).TotalSeconds}s");
         }
 
         [Fact]
