@@ -20,7 +20,7 @@ namespace BigObjectSerializer
             var dictionary = new Dictionary<TValue, TKey>();
             foreach (var entry in source)
             {
-                if (!dictionary.ContainsKey(entry.Value))
+                //if (!dictionary.ContainsKey(entry.Value)) We can assume this is always true
                     dictionary.Add(entry.Value, entry.Key);
             }
             return dictionary;
@@ -29,7 +29,7 @@ namespace BigObjectSerializer
         public static bool IsAssignableToGenericType(Type givenType, Type genericType)
         {
             var key = (givenType, genericType);
-            if (_isAssignableToGenericType.ContainsKey(key)) return _isAssignableToGenericType[key];
+            if (_isAssignableToGenericType.TryGetValue(key, out var isAssignable)) return isAssignable;
 
             // Source: https://stackoverflow.com/questions/74616/how-to-detect-if-type-is-another-generic-type/1075059#1075059
             var interfaceTypes = givenType.GetInterfaces();
@@ -54,9 +54,9 @@ namespace BigObjectSerializer
             var castEntries = ConvertTo(entries, genericParameter);
 
             var key = (genericContainerType, genericParameter);
-            if (_createFromEnumerableConstructor.ContainsKey(key))
+            if (_createFromEnumerableConstructor.TryGetValue(key, out var constructor))
             {
-                return _createFromEnumerableConstructor[key].Invoke(new[] { castEntries });
+                return constructor.Invoke(new[] { castEntries });
             }
             else
             {
@@ -87,7 +87,7 @@ namespace BigObjectSerializer
 
         public static Type GetElementType(Type type)
         {
-            if (_getElementType.ContainsKey(type)) return _getElementType[type];
+            if (_getElementType.TryGetValue(type, out var elementType)) return elementType;
 
             // Source: https://stackoverflow.com/questions/906499/getting-type-t-from-ienumerablet
             // Type is Array
@@ -127,9 +127,9 @@ namespace BigObjectSerializer
 
         public static IEnumerable ConvertTo(this IEnumerable items, Type targetType)
         {
-            if (_convertToMakeGeneric.ContainsKey(targetType))
+            if (_convertToMakeGeneric.TryGetValue(targetType, out var makeGeneric))
             {
-                return (IEnumerable)_convertToMakeGeneric[targetType].Invoke(null, new[] { items });
+                return (IEnumerable)makeGeneric.Invoke(null, new[] { items });
             }
             else
             {
@@ -146,9 +146,9 @@ namespace BigObjectSerializer
 
         public static IList ConvertToList(this IEnumerable items, Type targetType)
         {
-            if (_convertToListMakeGeneric.ContainsKey(targetType))
+            if (_convertToListMakeGeneric.TryGetValue(targetType, out var convertToList))
             {
-                return (IList)_convertToListMakeGeneric[targetType].Invoke(null, new[] { items });
+                return (IList)convertToList.Invoke(null, new[] { items });
             }
             else
             {
@@ -165,9 +165,9 @@ namespace BigObjectSerializer
 
         public static object ConvertToArray(this IEnumerable items, Type targetType)
         {
-            if (_convertToArrayMakeGeneric.ContainsKey(targetType))
+            if (_convertToArrayMakeGeneric.TryGetValue(targetType, out var convertToArray))
             {
-                return _convertToArrayMakeGeneric[targetType].Invoke(null, new[] { items });
+                return convertToArray.Invoke(null, new[] { items });
             }
             else
             {

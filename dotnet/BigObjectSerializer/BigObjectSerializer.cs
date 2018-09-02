@@ -30,6 +30,7 @@ namespace BigObjectSerializer
         private readonly IDictionary<Type, IImmutableDictionary<string, byte>> _propertyToIntMapping = new Dictionary<Type, IImmutableDictionary<string, byte>>(); // NOTE: Byte only allows up to 255 properties. Benchmark with short also
         private readonly IDictionary<Type, TypeAccessor> _getters = new Dictionary<Type, TypeAccessor>();
         private readonly IDictionary<Type, (Type keyType, Type valueType)> _keyValueTypes = new Dictionary<Type, (Type keyType, Type valueType)>();
+        private readonly IDictionary<Type, bool> _isKeyValuePair = new Dictionary<Type, bool>();
 
         static BigObjectSerializer()
         {
@@ -143,37 +144,18 @@ namespace BigObjectSerializer
         #region Reflective Push
 
         public void PushObject<T>(T value, int maxDepth = 10) where T : new()
-            => PushObject(value, typeof(T), 1, maxDepth);
+            => PushValue(value, typeof(T), 1, maxDepth);
 
         public void PushObject(object value, Type type, int maxDepth = 10)
-            => PushObject(value, type, 1, maxDepth);
+            => PushValue(value, type, 1, maxDepth);
 
         private void PushObject(object value, Type type, int depth, int maxDepth)
         {
             if (depth > maxDepth) return; // Ignore properties past max depth
-
-            // Null check
-            if (value is null)
-            {
-                return;
-            }
-            
-            var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
-            if (_pushValueTypes.Contains(typeWithoutGenerics)) // Might be better to instead check if it's one of the types directly serializable
-            {
-                // Raw value to push
-                PushValue(value, type, depth + 1, maxDepth);
-                return;
-            }
-            else if (typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics))
-            {
-                PushKeyValuePair(value, type, depth + 1, maxDepth);
-                return;
-            }
             
             if (GetPropertyNameMapping(type, out var propertyNameMappings))
             {
-                PushObject(propertyNameMappings, typeof(IDictionary<string, byte>));
+                PushValue(propertyNameMappings, typeof(IDictionary<string, byte>), depth + 1, maxDepth);
             }
 
             var getters = GetTypeAccessor(type);
@@ -181,11 +163,11 @@ namespace BigObjectSerializer
             {
                 var propertyType = property.PropertyType;
                 var name = property.Name;
-                var propertyValue = getters[value, property.Name];
+                var propertyValue = getters[value, name];
                 
                 PushByte(propertyNameMappings[name]);
 
-                if (propertyValue == null)
+                if (propertyValue is null)
                 {
                     // Null values are marked with byte value 0x00 and skipped
                     PushByte(0x0);
@@ -202,31 +184,43 @@ namespace BigObjectSerializer
 
         private TypeAccessor GetTypeAccessor(Type type)
         {
-            if (!_getters.ContainsKey(type))
+            if (!_getters.TryGetValue(type, out var getter))
             {
-                _getters[type] = TypeAccessor.Create(type);
+                getter = _getters[type] = TypeAccessor.Create(type);
             }
-            return _getters[type];
+            return getter;
         }
         
         private IImmutableList<PropertyInfo> GetPropertiesToGet(Type type)
         {
-            if (_propertiesByType.ContainsKey(type))
+            if (!_propertiesByType.TryGetValue(type, out var properties))
             {
-                return _propertiesByType[type];
+                properties = _propertiesByType[type] =
+                    _propertiesByType[type] = type
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(p => p.CanRead && p.CanWrite)
+                    .ToImmutableList();
             }
-            return _propertiesByType[type] = type
-                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Where(p => p.CanRead && p.CanWrite)
-                .ToImmutableList();
+            return properties;
         }
 
         private void PushValue(object value, Type type, int depth, int maxDepth)
         {
-            if (_basicTypePushMethods.ContainsKey(type))
+            // Null check
+            if (value is null)
+            {
+                return;
+            }
+
+            if (_basicTypePushMethods.TryGetValue(type, out var pushMethod))
             {
                 // Property was basic supported type and was pushed
-                _basicTypePushMethods[type](this, value);
+                pushMethod(this, value);
+                return;
+            }
+            else if (IsKeyValuePair(type))
+            {
+                PushKeyValuePair(value, type, depth + 1, maxDepth);
                 return;
             }
             else if (type.IsArray || typeof(IEnumerable).IsAssignableFrom(type))
@@ -239,39 +233,50 @@ namespace BigObjectSerializer
                 //foreach (var entry in enumerable)
                 for (var i = 0; i < enumerable.Length; ++i)
                 {
-                    PushObject(enumerable[i], genericType, depth + 1, maxDepth);
+                    PushValue(enumerable[i], genericType, depth + 1, maxDepth);
                 }
             }
-            else if (type.IsClass) // TODO: Handle structs
+            else // TODO: Handle structs
             {
                 PushObject(value, type, depth + 1, maxDepth);
             }
-            else
+            /*else
             {
                 throw new NotImplementedException($"{nameof(PushObject)} does not support serializing type of {type.FullName}");
-            }
+            }*/
         }
 
         private void PushKeyValuePair(object value, Type type, int depth, int maxDepth)
         {
             // KeyValuePair is pushed as the key then value
-            if (!_keyValueTypes.ContainsKey(type))
+            if (!_keyValueTypes.TryGetValue(type, out var kvType))
             {
                 var properties = type.GetProperties();
                 var kvKeyProperty = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Key));
                 var kvValueProperty = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Value));
-                _keyValueTypes[type] = (kvKeyProperty.PropertyType, kvValueProperty.PropertyType);
+                kvType = _keyValueTypes[type] = (kvKeyProperty.PropertyType, kvValueProperty.PropertyType);
             }
-            var (keyType, valueType) = _keyValueTypes[type];
+            var (keyType, valueType) = kvType;
 
             var getters = GetTypeAccessor(type);
             var kvKey = getters[value, nameof(KeyValuePair<object, object>.Key)];
             var kvValue = getters[value, nameof(KeyValuePair<object, object>.Value)];
 
-            PushObject(kvKey, keyType, depth + 1, maxDepth);
-            PushObject(kvValue, valueType, depth + 1, maxDepth);
+            // TODO: Handle null key or value
+            PushValue(kvKey, keyType, depth + 1, maxDepth);
+            PushValue(kvValue, valueType, depth + 1, maxDepth);
         }
-        
+
+        private bool IsKeyValuePair(Type type)
+        {
+            if (!_isKeyValuePair.TryGetValue(type, out var isKeyValueType))
+            {
+                var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
+                isKeyValueType = _isKeyValuePair[type] = typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics);
+            }
+            return isKeyValueType;
+        }
+
         #endregion
 
         /// <summary>
@@ -282,7 +287,7 @@ namespace BigObjectSerializer
         /// <returns>Returns true if the first time the type to map has appeared.</returns>
         private bool GetPropertyNameMapping(Type type, out IImmutableDictionary<string, byte> mapping)
         {
-            if (!_propertyToIntMapping.ContainsKey(type))
+            if (!_propertyToIntMapping.TryGetValue(type, out var mappingResult))
             {
                 var newMapping = new Dictionary<string, byte>();
                 byte counter = 1; // 0 == end of object
@@ -297,7 +302,7 @@ namespace BigObjectSerializer
                 return true;
             }
 
-            mapping = _propertyToIntMapping[type];
+            mapping = mappingResult;
             return false;
         }
 

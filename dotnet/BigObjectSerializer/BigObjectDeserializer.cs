@@ -283,32 +283,32 @@ namespace BigObjectSerializer
 
         private IImmutableDictionary<byte, string> GetPropertyToIntMapping(Type type)
         {
-            if (!_propertyToByteMapping.ContainsKey(type))
+            if (!_propertyToByteMapping.TryGetValue(type, out var intMapping))
             {
                 var mapping = ((IDictionary<string, byte>)PopObject(typeof(IDictionary<string, byte>))).Reverse();
-                _propertyToByteMapping[type] = mapping.ToImmutableDictionary();
+                intMapping = _propertyToByteMapping[type] = mapping.ToImmutableDictionary();
             }
-            return _propertyToByteMapping[type];
+            return intMapping;
         }
 
         private IImmutableDictionary<string, PropertyInfo> GetPropertiesToSet(Type type)
         {
-            if (_propertiesByType.ContainsKey(type))
+            if (!_propertiesByType.TryGetValue(type, out var properties))
             {
-                return _propertiesByType[type];
+                return _propertiesByType[type] = type
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(p => p.CanRead && p.CanWrite)
+                    .ToImmutableDictionary(item => item.Name, item => item);
             }
-            return _propertiesByType[type] = type
-                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Where(p => p.CanRead && p.CanWrite)
-                .ToImmutableDictionary(item => item.Name, item => item);
+            return properties;
         }
 
         private object PopValue(Type type, int depth, int maxDepth)
         {
-            if (_basicTypePopMethods.ContainsKey(type))
+            if (_basicTypePopMethods.TryGetValue(type, out var popMethod))
             {
                 // Property was basic supported type and was pushed
-                return _basicTypePopMethods[type]();
+                return popMethod();
             }
             else if (IsKeyValuePair(type))
             {
@@ -328,14 +328,13 @@ namespace BigObjectSerializer
                 
                 if (Utilities.IsAssignableToGenericType(type, typeof(IDictionary<,>)))
                 {
-                    if (!_makeGenericTypeDictionary.ContainsKey(genericType))
+                    if (!_makeGenericTypeDictionary.TryGetValue(genericType, out var dictionaryGenericType))
                     {
                         var genericArguments = genericType.GetGenericArguments();
                         var genericType1 = genericArguments[0];
                         var genericType2 = genericArguments[1];
-                        _makeGenericTypeDictionary[genericType] = typeof(Dictionary<,>).MakeGenericType(genericType1, genericType2);
+                        dictionaryGenericType = _makeGenericTypeDictionary[genericType] = typeof(Dictionary<,>).MakeGenericType(genericType1, genericType2);
                     }
-                    var dictionaryGenericType = _makeGenericTypeDictionary[genericType];
                     return Utilities.CreateFromEnumerableConstructor(dictionaryGenericType, genericType, entries);
                 }
                 else if (type.IsArray)
@@ -344,11 +343,11 @@ namespace BigObjectSerializer
                 }
                 else if (Utilities.IsAssignableToGenericType(type, typeof(ISet<>)))
                 {
-                    if (!_makeGenericTypeHashset.ContainsKey(genericType))
+                    if (!_makeGenericTypeHashset.TryGetValue(genericType, out var makeGenericTypeHashset))
                     {
-                        _makeGenericTypeHashset[genericType] = typeof(HashSet<>).MakeGenericType(genericType);
+                        makeGenericTypeHashset = _makeGenericTypeHashset[genericType] = typeof(HashSet<>).MakeGenericType(genericType);
                     }
-                    return Utilities.CreateFromEnumerableConstructor(_makeGenericTypeHashset[genericType], genericType, entries);
+                    return Utilities.CreateFromEnumerableConstructor(makeGenericTypeHashset, genericType, entries);
                 }
                 else if (Utilities.IsAssignableToGenericType(type, typeof(IList<>)))
                 {
@@ -375,31 +374,30 @@ namespace BigObjectSerializer
 
         private bool IsKeyValuePair(Type type)
         {
-            if (!_isKeyValuePair.ContainsKey(type))
+            if (!_isKeyValuePair.TryGetValue(type, out var isKeyValuePair))
             {
                 var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
-                _isKeyValuePair[type] = typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics);
+                isKeyValuePair = _isKeyValuePair[type] = typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics);
             }
-            return _isKeyValuePair[type];
+            return isKeyValuePair;
         }
 
         private object PopKeyValuePair(Type type, int depth, int maxDepth)
         {
             // KeyValuePair is popped as the key then value
-            if (!_genericArguments.ContainsKey(type))
+            if (!_genericArguments.TryGetValue(type, out var genericArguments))
             {
-                _genericArguments[type] = type.GetGenericArguments();
+                genericArguments = _genericArguments[type] = type.GetGenericArguments();
             }
             
-            var genericParameters = _genericArguments[type];
-            var kvKey = PopObject(genericParameters[0], depth + 1, maxDepth);
-            var kvValue = PopObject(genericParameters[1], depth + 1, maxDepth);
+            var kvKey = PopObject(genericArguments[0], depth + 1, maxDepth);
+            var kvValue = PopObject(genericArguments[1], depth + 1, maxDepth);
             
-            if (!_keyValueConstructors.ContainsKey(type))
+            if (!_keyValueConstructors.TryGetValue(type, out var constructor))
             {
-                _keyValueConstructors[type] = type.GetConstructors().First();
+                constructor = _keyValueConstructors[type] = type.GetConstructors().First();
             }
-            return _keyValueConstructors[type].Invoke(new[] { kvKey, kvValue });
+            return constructor.Invoke(new[] { kvKey, kvValue });
         }
         
         #endregion
