@@ -37,6 +37,7 @@ namespace BigObjectSerializer
         private readonly IDictionary<Type, Type> _makeGenericTypeDictionary = new Dictionary<Type, Type>();
         private readonly IDictionary<Type, Type> _makeGenericTypeHashset = new Dictionary<Type, Type>();
         private readonly IDictionary<Type, IImmutableDictionary<byte, string>> _propertyToByteMapping = new Dictionary<Type, IImmutableDictionary<byte, string>>();
+        private readonly IDictionary<Type, bool> _isKeyValuePair = new Dictionary<Type, bool>();
 
         static BigObjectDeserializer()
         {
@@ -244,7 +245,7 @@ namespace BigObjectSerializer
                 // Raw value to push
                 return PopValue(type, depth + 1, maxDepth);
             }
-            else if (typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics))
+            else if (IsKeyValuePair(type))
             {
                 return PopKeyValuePair(type, depth + 1, maxDepth);
             }
@@ -309,6 +310,10 @@ namespace BigObjectSerializer
                 // Property was basic supported type and was pushed
                 return _basicTypePopMethods[type]();
             }
+            else if (IsKeyValuePair(type))
+            {
+                return PopKeyValuePair(type, depth + 1, maxDepth);
+            }
             else if (type.IsArray || typeof(IEnumerable).IsAssignableFrom(type))
             {
                 // For collections, we can just store the values and let the deserializer figure out what container to put them inside
@@ -317,7 +322,7 @@ namespace BigObjectSerializer
                 var entries = new List<object>();
                 for (var i = 0; i < length; ++i)
                 {
-                    var value = PopObject(genericType, depth + 1, maxDepth);
+                    var value = PopValue(genericType, depth + 1, maxDepth);
                     entries.Add(value);
                 }
                 
@@ -366,6 +371,16 @@ namespace BigObjectSerializer
             {
                 throw new NotImplementedException($"{nameof(PopObject)} does not support deserializing type of {type.FullName}");
             }
+        }
+
+        private bool IsKeyValuePair(Type type)
+        {
+            if (!_isKeyValuePair.ContainsKey(type))
+            {
+                var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
+                _isKeyValuePair[type] = typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics);
+            }
+            return _isKeyValuePair[type];
         }
 
         private object PopKeyValuePair(Type type, int depth, int maxDepth)

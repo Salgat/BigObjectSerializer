@@ -153,12 +153,9 @@ namespace BigObjectSerializer
             if (depth > maxDepth) return; // Ignore properties past max depth
 
             // Null check
-            if (type.IsClass)
+            if (value is null)
             {
-                if (value is null)
-                {
-                    return;
-                }
+                return;
             }
             
             var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
@@ -229,19 +226,20 @@ namespace BigObjectSerializer
             if (_basicTypePushMethods.ContainsKey(type))
             {
                 // Property was basic supported type and was pushed
-                _basicTypePushMethods[type].Invoke(this, value);
+                _basicTypePushMethods[type](this, value);
                 return;
             }
             else if (type.IsArray || typeof(IEnumerable).IsAssignableFrom(type))
             {
                 // For collections, we can just store the values and let the deserializer figure out what container to put them inside
                 var genericType = Utilities.GetElementType(type);
-                var enumerable = ((IEnumerable)value).OfType<object>();
+                var enumerable = ((IEnumerable)value).OfType<object>().ToArray();
 
-                PushInt(enumerable.Count()); // Store the length of the enumerable
-                foreach (var entry in enumerable)
+                PushInt(enumerable.Length); // Store the length of the enumerable
+                //foreach (var entry in enumerable)
+                for (var i = 0; i < enumerable.Length; ++i)
                 {
-                    PushObject(entry, genericType, depth + 1, maxDepth);
+                    PushObject(enumerable[i], genericType, depth + 1, maxDepth);
                 }
             }
             else if (type.IsClass) // TODO: Handle structs
