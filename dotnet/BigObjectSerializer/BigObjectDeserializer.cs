@@ -13,9 +13,13 @@ namespace BigObjectSerializer
 {
     public class BigObjectDeserializer : IDisposable
     {
-        private Func<byte[], int, CancellationToken, Task> _readFunc;
-        private readonly bool _isLittleEndian = BitConverter.IsLittleEndian;
-        private readonly byte[] _inputBuffer = new byte[8];
+        private Action<byte[], int> _readFunc;
+        private readonly byte[] _inputBuffer = new byte[8*1000000];
+        private readonly byte[] _inputBufferOld = new byte[LargestBufferObject]; // This holds the last 8 bytes of the old buffer
+        private const int LargestBufferObject = 8; // 8 bytes (long - 64 bits)
+        private int _inputBufferOffset = 0;
+        private bool _initialized = false;
+        private static readonly object[] _emptyArray = new object[0];
 
         // Safely copying byte contents of float and double derived from https://github.com/google/flatbuffers/blob/master/net/FlatBuffers/ByteBuffer.cs
         private float[] _floatBuffer = new[] { 0.0f };
@@ -24,25 +28,54 @@ namespace BigObjectSerializer
         private ulong[] _ulongBuffer = new[] { 0UL };
 
         // Reflection
-        private static readonly IImmutableDictionary<Type, MethodInfo> _basicTypePopMethods; // Types that directly map to basic Pop Methods (such as PopIntAsync)
-        private static readonly IImmutableSet<Type> _popValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
+        private readonly IDictionary<Type, IImmutableDictionary<string, PropertyInfo>> _propertiesByType = new Dictionary<Type, IImmutableDictionary<string, PropertyInfo>>();
+        private readonly IImmutableDictionary<Type, Func<object>> _basicTypePopMethods; // Types that directly map to basic Pop Methods (such as PopInt)
+        private static readonly IImmutableDictionary<Type, PropertyInfo> _basicTypeGenericTaskResult; // Types that directly map to basic Pop Methods (such as PopInt)
+        private readonly IImmutableSet<Type> _popValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
+        private readonly IDictionary<Type, ConstructorInfo> _keyValueConstructors = new Dictionary<Type, ConstructorInfo>();
+        private readonly IDictionary<Type, Type[]> _genericArguments = new Dictionary<Type, Type[]>();
+        private readonly IDictionary<Type, Type> _makeGenericTypeDictionary = new Dictionary<Type, Type>();
+        private readonly IDictionary<Type, Type> _makeGenericTypeHashset = new Dictionary<Type, Type>();
+        private readonly IDictionary<Type, IImmutableDictionary<byte, string>> _propertyToByteMapping = new Dictionary<Type, IImmutableDictionary<byte, string>>();
+        private readonly IDictionary<Type, bool> _isKeyValuePair = new Dictionary<Type, bool>();
 
         static BigObjectDeserializer()
         {
-            var popMethods = new Dictionary<Type, MethodInfo>
+        }
+        
+        public BigObjectDeserializer(Action<byte[], int> readFunc) : this()
+        {
+            _readFunc = readFunc;
+        }
+
+        public BigObjectDeserializer(Stream inputStream) : this()
+        {
+            _readFunc = (inputBuffer, readCount) =>
             {
-                [typeof(int)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopIntAsync)),
-                [typeof(uint)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopUnsignedIntAsync)),
-                [typeof(short)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopShortAsync)),
-                [typeof(ushort)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopUnsignedShortAsync)),
-                [typeof(long)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopLongAsync)),
-                [typeof(ulong)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopUnsignedLongAsync)),
-                [typeof(byte)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopByteAsync)),
-                [typeof(bool)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopBoolAsync)),
-                [typeof(float)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopFloatAsync)),
-                [typeof(double)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopDoubleAsync)),
-                [typeof(string)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopStringAsync)),
-                [typeof(Guid)] = typeof(BigObjectDeserializer).GetMethod(nameof(PopGuidAsync))
+                var byteCount = inputStream.Read(inputBuffer, 0, readCount);
+                /*if (byteCount != readCount)
+                {
+                    throw new ArgumentException($"Expected to read count of {readCount} but read {byteCount}.");
+                }*/
+            };
+        }
+
+        private BigObjectDeserializer()
+        {
+            var popMethods = new Dictionary<Type, Func<object>>
+            {
+                [typeof(int)] = () => PopInt(),
+                [typeof(uint)] = () => PopUnsignedInt(),
+                [typeof(short)] = () => PopShort(),
+                [typeof(ushort)] = () => PopUnsignedShort(),
+                [typeof(long)] = () => PopLong(),
+                [typeof(ulong)] = () => PopUnsignedLong(),
+                [typeof(byte)] = () => PopByte(),
+                [typeof(bool)] = () => PopBool(),
+                [typeof(float)] = () => PopFloat(),
+                [typeof(double)] = () => PopDouble(),
+                [typeof(string)] = () => PopString(),
+                [typeof(Guid)] = () => PopGuid(),
             };
             _basicTypePopMethods = popMethods.ToImmutableDictionary();
 
@@ -53,200 +86,255 @@ namespace BigObjectSerializer
             popValueTypes.Add(typeof(IEnumerable<>));
             _popValueTypes = popValueTypes.ToImmutableHashSet();
         }
-        
-        public BigObjectDeserializer(Func<byte[], int, CancellationToken, Task> readFunc)
-        {
-            _readFunc = readFunc;
-        }
-
-        public BigObjectDeserializer(Stream inputStream)
-        {
-            _readFunc = async (inputBuffer, readCount, cancellationToken) =>
-            {
-                var byteCount = await inputStream.ReadAsync(inputBuffer, 0, readCount, cancellationToken);
-                if (byteCount != readCount)
-                {
-                    throw new ArgumentException($"Expected to read count of {readCount} but read {byteCount}.");
-                }
-            };
-        }
 
         #region Pop
 
-        private async Task<ulong> ReadAsync(int count)
+        private ulong Read(int count)
         {
             ulong result = 0;
-            await _readFunc(_inputBuffer, count, CancellationToken.None);
 
-            if (_isLittleEndian)
+            var inputBufferOffset = _inputBufferOffset;
+            var inputBufferOffsetPlusCount = _inputBufferOffset + count;
+            var useOldBuffer = false;
+            if (!_initialized || inputBufferOffsetPlusCount >= _inputBuffer.Length)
             {
-                for (var i = 0; i < count; ++i)
+                if (_initialized)
                 {
-                    result |= (ulong)_inputBuffer[i] << i * 8;
+                    if (_inputBufferOffset != _inputBuffer.Length)
+                    {
+                        Buffer.BlockCopy(_inputBuffer, _inputBuffer.Length - LargestBufferObject, _inputBufferOld, 0, LargestBufferObject);
+                        useOldBuffer = true;
+                    }
                 }
+                else
+                {
+                    _initialized = true;
+                }
+
+                _readFunc(_inputBuffer, _inputBuffer.Length);
+                _inputBufferOffset = (inputBufferOffsetPlusCount) % LargestBufferObject;
             }
             else
             {
-                for (var i = 0; i < count; ++i)
+                _inputBufferOffset = inputBufferOffsetPlusCount;
+            }
+            
+            for (var i = 0; i < count; ++i)
+            {
+                var index = inputBufferOffset + i;
+                if (index >= _inputBuffer.Length)
                 {
-                    result |= (ulong)_inputBuffer[count - 1 - i] << i * 8;
+                    result |= (ulong)_inputBuffer[index % 8] << i * 8;
+                }
+                else if (!useOldBuffer)
+                {
+                    result |= (ulong)_inputBuffer[index] << i * 8;
+                }
+                else
+                {
+                    result |= (ulong)_inputBufferOld[index % 8] << i * 8;
                 }
             }
+            
             return result;
         }
 
-        public async Task<string> PopStringAsync()
+        public string PopString()
         {
-            var length = await PopIntAsync(); // Strings start with an int value of the string length
-            var characterBytes = new byte[length];
-            for (var i = 0; i < length; ++i)
+            var length = PopInt(); // Strings start with an int value of the string length
+            if (length == 0) return string.Empty;
+
+            var characterBytes = PopBytes(length);
+            return Encoding.UTF8.GetString(characterBytes);
+        }
+
+        private byte ReadByte()
+        {
+            if (!_initialized || _inputBufferOffset >= _inputBuffer.Length)
             {
-                characterBytes[i] = await PopByteAsync();
+                _initialized = true;
+                _readFunc(_inputBuffer, _inputBuffer.Length);
+                _inputBufferOffset = 0;
             }
-
-            return new string(Encoding.UTF8.GetChars(characterBytes));
+            _inputBufferOffset += 1;
+            return _inputBuffer[_inputBufferOffset - 1];
         }
 
-        private async Task<byte> ReadByteAsync()
+        public int PopInt()
+            => (int)Read(sizeof(int));
+
+        public uint PopUnsignedInt()
+            => (uint)Read(sizeof(int));
+
+        public short PopShort()
+            => (short)Read(sizeof(short));
+
+        public ushort PopUnsignedShort()
+            => (ushort)Read(sizeof(ushort));
+
+        public long PopLong()
+            => (long)Read(sizeof(long));
+
+        public ulong PopUnsignedLong()
+            => Read(sizeof(ulong));
+
+        public bool PopBool()
+            => ReadByte() == (byte)0x1;
+
+        public float PopFloat()
         {
-            await _readFunc(_inputBuffer, 1, CancellationToken.None);
-            return _inputBuffer[0];
-        }
-
-        public Task<int> PopIntAsync()
-            => ReadAsync(sizeof(int)).ContinueWith(t => (int)t.Result);
-
-        public Task<uint> PopUnsignedIntAsync()
-            => ReadAsync(sizeof(int)).ContinueWith(t => (uint)t.Result);
-
-        public Task<short> PopShortAsync()
-            => ReadAsync(sizeof(short)).ContinueWith(t => (short)t.Result);
-
-        public Task<ushort> PopUnsignedShortAsync()
-            => ReadAsync(sizeof(ushort)).ContinueWith(t => (ushort)t.Result);
-
-        public Task<long> PopLongAsync()
-            => ReadAsync(sizeof(long)).ContinueWith(t => (long)t.Result);
-
-        public Task<ulong> PopUnsignedLongAsync()
-            => ReadAsync(sizeof(ulong)).ContinueWith(t => (ulong)t.Result);
-
-        public Task<byte> PopByteAsync()
-            => ReadByteAsync();
-
-        public async Task<bool> PopBoolAsync()
-            => await ReadByteAsync() == (byte)0x1;
-
-        public async Task<float> PopFloatAsync()
-        {
-            _intBuffer[0] = await PopIntAsync();
+            _intBuffer[0] = PopInt();
             Buffer.BlockCopy(_intBuffer, 0, _floatBuffer, 0, sizeof(float));
             return _floatBuffer[0];
         }
 
-        public async Task<double> PopDoubleAsync()
+        public double PopDouble()
         {
-            _ulongBuffer[0] = await PopUnsignedLongAsync();
+            _ulongBuffer[0] = PopUnsignedLong();
             Buffer.BlockCopy(_ulongBuffer, 0, _doubleBuffer, 0, sizeof(double));
             return _doubleBuffer[0];
         }
 
-        public Task<Guid> PopGuidAsync()
-            => PopStringAsync().ContinueWith(t => new Guid(t.Result));
+        public Guid PopGuid()
+            => new Guid(PopBytes(16));
+
+        public byte PopByte()
+            => ReadByte();
+
+        public byte[] PopBytes(int count)
+        {
+            var result = new byte[count];
+            var bytesRead = 0;
+            while (bytesRead != count)
+            {
+                var bytesAvailableToReadFromBuffer = _inputBuffer.Length - _inputBufferOffset;
+                if (bytesAvailableToReadFromBuffer == 0)
+                {
+                    _readFunc(_inputBuffer, _inputBuffer.Length);
+                    _inputBufferOffset = 0;
+                }
+
+                var bytesToRead = bytesAvailableToReadFromBuffer >= count - bytesRead ?
+                        count - bytesRead :
+                        bytesAvailableToReadFromBuffer;
+                Buffer.BlockCopy(_inputBuffer, _inputBufferOffset, result, bytesRead, bytesToRead);
+                bytesRead += bytesToRead;
+                _inputBufferOffset += bytesToRead;
+            }
+            
+            return result;
+        }
 
         #endregion
 
         #region Reflective Pop
 
-        public Task<T> PopObjectAsync<T>(int maxDepth = 10) where T : new()
-            => PopObjectAsync(typeof(T), 1, maxDepth).ContinueWith(t => (T)t.Result);
+        public T PopObject<T>(int maxDepth = 10) where T : new()
+            => (T)PopObject(typeof(T), 1, maxDepth);
 
-        public Task<object> PopObjectAsync(Type type, int maxDepth = 10)
-            => PopObjectAsync(type, 1, maxDepth);
+        public object PopObject(Type type, int maxDepth = 10)
+            => PopObject(type, 1, maxDepth);
 
-        private async Task<object> PopObjectAsync(Type type, int depth, int maxDepth)
+        private object PopObject(Type type, int depth, int maxDepth)
         {
             if (depth > maxDepth) return null; // Ignore properties past max depth
-
-            // Null check
-            if (type.IsClass)
-            {
-                if (await PopByteAsync() == 0x0)
-                {
-                    return null;
-                }
-            }
-
-            var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance).ToList();
-
+            
             var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
             if (_popValueTypes.Contains(typeWithoutGenerics))
             {
                 // Raw value to push
-                return await PopValueAsync(type, depth + 1, maxDepth);
+                return PopValue(type, depth + 1, maxDepth);
             }
-            else if (typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics))
+            else if (IsKeyValuePair(type))
             {
-                return await PopKeyValuePairAsync(type, depth + 1, maxDepth);
+                return PopKeyValuePair(type, depth + 1, maxDepth);
             }
+
+            var mapping = GetPropertyToIntMapping(type);
 
             // Create and populate object
             var result = Activator.CreateInstance(type);
-            var propertiesToSet = properties.Where(p => p.CanRead && p.CanWrite); // For now we only consider properties with getter/setter
-
-            if (await PopStringAsync() != "__BOS_S") throw new ArgumentException("Expected start of object.");
-
+            var propertiesToSet = GetPropertiesToSet(type); // For now we only consider properties with getter/setter
             while (true)
             {
-                var propertyName = await PopStringAsync();
-                if (propertyName == "__BOS_E") break; // End of object
+                var propertyByteId = PopByte();
+                if (propertyByteId == 0) break; // End of object
 
-                var matchingProperty = propertiesToSet.FirstOrDefault(p => p.Name == propertyName);
-                if (matchingProperty == default)
+                var propertyName = mapping[propertyByteId];
+                if (!propertiesToSet.ContainsKey(propertyName))
                 {
                     // We don't know how many values to pop, so we can't determine how to skip
                     throw new ArgumentException($"Property name {propertyName} not found in type but is expected.");
                 }
-             
+                var matchingProperty = propertiesToSet[propertyName];
+
                 var propertyType = matchingProperty.PropertyType;
 
-                var propertyHasValue = await PopByteAsync() == 0x01;
+                var propertyHasValue = PopByte() == 0x01;
 
                 if (!propertyHasValue) continue; // Ignore null values
                 
-                var propertyValue = await PopValueAsync(propertyType, depth + 1, maxDepth);
+                var propertyValue = PopValue(propertyType, depth + 1, maxDepth);
                 matchingProperty.SetValue(result, propertyValue);
             }
 
             return result;
         }
 
-        private async Task<object> PopValueAsync(Type type, int depth, int maxDepth)
+        private IImmutableDictionary<byte, string> GetPropertyToIntMapping(Type type)
         {
-            var (success, result) = await TryPopBasicTypeAsync(type);
-            if (success)
+            if (!_propertyToByteMapping.TryGetValue(type, out var intMapping))
+            {
+                var mapping = ((IDictionary<string, byte>)PopObject(typeof(IDictionary<string, byte>))).Reverse();
+                intMapping = _propertyToByteMapping[type] = mapping.ToImmutableDictionary();
+            }
+            return intMapping;
+        }
+
+        private IImmutableDictionary<string, PropertyInfo> GetPropertiesToSet(Type type)
+        {
+            if (!_propertiesByType.TryGetValue(type, out var properties))
+            {
+                return _propertiesByType[type] = type
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(p => p.CanRead && p.CanWrite)
+                    .ToImmutableDictionary(item => item.Name, item => item);
+            }
+            return properties;
+        }
+
+        private object PopValue(Type type, int depth, int maxDepth)
+        {
+            if (_basicTypePopMethods.TryGetValue(type, out var popMethod))
             {
                 // Property was basic supported type and was pushed
-                return result;
+                return popMethod();
+            }
+            else if (IsKeyValuePair(type))
+            {
+                return PopKeyValuePair(type, depth + 1, maxDepth);
             }
             else if (type.IsArray || typeof(IEnumerable).IsAssignableFrom(type))
             {
                 // For collections, we can just store the values and let the deserializer figure out what container to put them inside
                 var genericType = Utilities.GetElementType(type);
-                var length = await PopIntAsync();
+                var length = PopInt();
                 var entries = new List<object>();
                 for (var i = 0; i < length; ++i)
                 {
-                    var value = await PopObjectAsync(genericType, depth + 1, maxDepth);
+                    var value = PopValue(genericType, depth + 1, maxDepth);
                     entries.Add(value);
                 }
                 
                 if (Utilities.IsAssignableToGenericType(type, typeof(IDictionary<,>)))
                 {
-                    var genericArguments = genericType.GetGenericArguments();
-                    var genericType1 = genericArguments[0];
-                    var genericType2 = genericArguments[1];
-                    var dictionaryGenericType = typeof(Dictionary<,>).MakeGenericType(genericType1, genericType2);
+                    if (!_makeGenericTypeDictionary.TryGetValue(genericType, out var dictionaryGenericType))
+                    {
+                        var genericArguments = genericType.GetGenericArguments();
+                        var genericType1 = genericArguments[0];
+                        var genericType2 = genericArguments[1];
+                        dictionaryGenericType = _makeGenericTypeDictionary[genericType] = typeof(Dictionary<,>).MakeGenericType(genericType1, genericType2);
+                    }
                     return Utilities.CreateFromEnumerableConstructor(dictionaryGenericType, genericType, entries);
                 }
                 else if (type.IsArray)
@@ -255,8 +343,11 @@ namespace BigObjectSerializer
                 }
                 else if (Utilities.IsAssignableToGenericType(type, typeof(ISet<>)))
                 {
-                    var hashSetGenericType = typeof(HashSet<>).MakeGenericType(genericType);
-                    return Utilities.CreateFromEnumerableConstructor(hashSetGenericType, genericType, entries);
+                    if (!_makeGenericTypeHashset.TryGetValue(genericType, out var makeGenericTypeHashset))
+                    {
+                        makeGenericTypeHashset = _makeGenericTypeHashset[genericType] = typeof(HashSet<>).MakeGenericType(genericType);
+                    }
+                    return Utilities.CreateFromEnumerableConstructor(makeGenericTypeHashset, genericType, entries);
                 }
                 else if (Utilities.IsAssignableToGenericType(type, typeof(IList<>)))
                 {
@@ -268,40 +359,45 @@ namespace BigObjectSerializer
                 }
                 else
                 {
-                    throw new NotImplementedException($"{nameof(PopObjectAsync)} does not support deserializing type of {type.FullName}");
+                    throw new NotImplementedException($"{nameof(PopObject)} does not support deserializing type of {type.FullName}");
                 }
             }
             else if (type.IsClass) // TODO: Handle structs
             {
-                return await PopObjectAsync(type, depth + 1, maxDepth);
+                return PopObject(type, depth + 1, maxDepth);
             }
             else
             {
-                throw new NotImplementedException($"{nameof(PopObjectAsync)} does not support deserializing type of {type.FullName}");
+                throw new NotImplementedException($"{nameof(PopObject)} does not support deserializing type of {type.FullName}");
             }
         }
 
-        private async Task<object> PopKeyValuePairAsync(Type type, int depth, int maxDepth)
+        private bool IsKeyValuePair(Type type)
+        {
+            if (!_isKeyValuePair.TryGetValue(type, out var isKeyValuePair))
+            {
+                var typeWithoutGenerics = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
+                isKeyValuePair = _isKeyValuePair[type] = typeof(KeyValuePair<,>).IsAssignableFrom(typeWithoutGenerics);
+            }
+            return isKeyValuePair;
+        }
+
+        private object PopKeyValuePair(Type type, int depth, int maxDepth)
         {
             // KeyValuePair is popped as the key then value
-            var genericParameters = type.GetGenericArguments();
-            var kvKey = await PopObjectAsync(genericParameters[0], depth + 1, maxDepth);
-            var kvValue = await PopObjectAsync(genericParameters[1], depth + 1, maxDepth);
-
-            var constructor = type.GetConstructors().First();
-            return constructor.Invoke(new[] { kvKey, kvValue });
-        }
-
-        private async Task<(bool Success, object Result)> TryPopBasicTypeAsync(Type type)
-        {
-            if (_basicTypePopMethods.ContainsKey(type))
+            if (!_genericArguments.TryGetValue(type, out var genericArguments))
             {
-                var task = (Task)_basicTypePopMethods[type].Invoke(this, new object[0]);
-                await task;
-                var resultProperty = typeof(Task<>).MakeGenericType(type).GetProperty(nameof(Task<object>.Result));
-                return (true, resultProperty.GetValue(task));
+                genericArguments = _genericArguments[type] = type.GetGenericArguments();
             }
-            return (false, null);
+            
+            var kvKey = PopObject(genericArguments[0], depth + 1, maxDepth);
+            var kvValue = PopObject(genericArguments[1], depth + 1, maxDepth);
+            
+            if (!_keyValueConstructors.TryGetValue(type, out var constructor))
+            {
+                constructor = _keyValueConstructors[type] = type.GetConstructors().First();
+            }
+            return constructor.Invoke(new[] { kvKey, kvValue });
         }
         
         #endregion

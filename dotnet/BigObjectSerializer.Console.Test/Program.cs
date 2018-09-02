@@ -14,7 +14,7 @@ namespace BigObjectSerializer.Console.Test
         {
             Task.Run(async () =>
             {
-                var count = 100000;
+                var count = 1000000;
                 var random = new Random(0);
                 var benchmarkPoco = new BenchmarkPoco()
                 {
@@ -34,18 +34,17 @@ namespace BigObjectSerializer.Console.Test
                 using (var stream = File.Open("test.bin", FileMode.Create))
                 using (var serializer = new BigObjectSerializer(stream))
                 {
-                    await serializer.PushObjectAsync(benchmarkPoco);
-                    await serializer.FlushAsync();
+                    serializer.PushObject(benchmarkPoco);
+                    serializer.Flush();
                 }
                 var serializationDuration = timer.ElapsedMilliseconds;
-
-                await Task.Delay(1000); // Give time to release control of file
+                
                 var delayDuration = timer.ElapsedMilliseconds;
 
                 using (var stream = File.Open("test.bin", FileMode.Open))
                 using (var deserializer = new BigObjectDeserializer(stream))
                 {
-                    deserializedBenchmarkPoco = await deserializer.PopObjectAsync<BenchmarkPoco>();
+                    deserializedBenchmarkPoco = deserializer.PopObject<BenchmarkPoco>();
                 }
                 var deserializationDuration = timer.ElapsedMilliseconds;
 
@@ -53,7 +52,7 @@ namespace BigObjectSerializer.Console.Test
                 System.Console.WriteLine($"DictionaryValues count: {benchmarkPoco.DictionaryValues.Count()}, DoubleValues count: {benchmarkPoco.DoubleValues.Count}");
                 System.Console.WriteLine($"Serialization: {TimeSpan.FromMilliseconds(serializationDuration).TotalSeconds}s, Deserialization: {TimeSpan.FromMilliseconds(deserializationDuration - delayDuration).TotalSeconds}s");
             }).Wait();
-            System.Console.ReadLine();
+            //System.Console.ReadLine();
         }
     }
 }
