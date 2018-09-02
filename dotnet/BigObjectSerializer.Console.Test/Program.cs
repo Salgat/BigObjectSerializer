@@ -14,7 +14,7 @@ namespace BigObjectSerializer.Console.Test
         {
             Task.Run(async () =>
             {
-                var count = 4000000;
+                var count = 1000000;
                 var random = new Random(0);
                 var benchmarkPoco = new BenchmarkPoco()
                 {
@@ -38,8 +38,7 @@ namespace BigObjectSerializer.Console.Test
                     serializer.Flush();
                 }
                 var serializationDuration = timer.ElapsedMilliseconds;
-
-                await Task.Delay(1000); // Give time to release control of file
+                
                 var delayDuration = timer.ElapsedMilliseconds;
 
                 using (var stream = File.Open("test.bin", FileMode.Open))

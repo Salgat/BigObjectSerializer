@@ -1,4 +1,5 @@
-﻿using System;
+﻿using FastMember;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -27,6 +28,8 @@ namespace BigObjectSerializer
         private static readonly IImmutableSet<Type> _pushValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
         // Describes the mapping of string to int for each property name. Is serialized in the first instance of a type that doesn't already have a serialized mapping.
         private readonly IDictionary<Type, IImmutableDictionary<string, byte>> _propertyToIntMapping = new Dictionary<Type, IImmutableDictionary<string, byte>>(); // NOTE: Byte only allows up to 255 properties. Benchmark with short also
+        private readonly IDictionary<Type, TypeAccessor> _getters = new Dictionary<Type, TypeAccessor>();
+        private readonly IDictionary<Type, (Type keyType, Type valueType)> _keyValueTypes = new Dictionary<Type, (Type keyType, Type valueType)>();
 
         static BigObjectSerializer()
         {
@@ -176,14 +179,14 @@ namespace BigObjectSerializer
                 PushObject(propertyNameMappings, typeof(IDictionary<string, byte>));
             }
 
+            var getters = GetTypeAccessor(type);
             foreach (var property in GetPropertiesToGet(type)) // For now we only consider properties with getter/setter
             {
                 var propertyType = property.PropertyType;
                 var name = property.Name;
-                var propertyValue = property.GetValue(value);
-
+                var propertyValue = getters[value, property.Name];
+                
                 PushByte(propertyNameMappings[name]);
-                //PushString(name); // Property name is pushed first to help deserialization handle extra or out of order properties changed after serialization
 
                 if (propertyValue == null)
                 {
@@ -200,6 +203,15 @@ namespace BigObjectSerializer
             PushByte(0); // Mark end of object (since no property can have an empty string label)
         }
 
+        private TypeAccessor GetTypeAccessor(Type type)
+        {
+            if (!_getters.ContainsKey(type))
+            {
+                _getters[type] = TypeAccessor.Create(type);
+            }
+            return _getters[type];
+        }
+        
         private IImmutableList<PropertyInfo> GetPropertiesToGet(Type type)
         {
             if (_propertiesByType.ContainsKey(type))
@@ -245,12 +257,21 @@ namespace BigObjectSerializer
         private void PushKeyValuePair(object value, Type type, int depth, int maxDepth)
         {
             // KeyValuePair is pushed as the key then value
-            var properties = type.GetProperties();
-            var kvKey = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Key));
-            var kvValue = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Value));
+            if (!_keyValueTypes.ContainsKey(type))
+            {
+                var properties = type.GetProperties();
+                var kvKeyProperty = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Key));
+                var kvValueProperty = properties.First(p => p.Name == nameof(KeyValuePair<object, object>.Value));
+                _keyValueTypes[type] = (kvKeyProperty.PropertyType, kvValueProperty.PropertyType);
+            }
+            var (keyType, valueType) = _keyValueTypes[type];
 
-            PushObject(kvKey.GetValue(value), kvKey.PropertyType, depth + 1, maxDepth);
-            PushObject(kvValue.GetValue(value), kvValue.PropertyType, depth + 1, maxDepth);
+            var getters = GetTypeAccessor(type);
+            var kvKey = getters[value, nameof(KeyValuePair<object, object>.Key)];
+            var kvValue = getters[value, nameof(KeyValuePair<object, object>.Value)];
+
+            PushObject(kvKey, keyType, depth + 1, maxDepth);
+            PushObject(kvValue, valueType, depth + 1, maxDepth);
         }
         
         #endregion
