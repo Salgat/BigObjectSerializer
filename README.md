@@ -1,6 +1,6 @@
 # BigObjectSerializer
 
-This library attempts to provide a serializer that can handle very large objects efficiently. This includes objects that take up well over 1GB+ in memory. As of now the NewtonSoft JSON.NET serializer typically performs 25% faster while having a file size a roughly double compared to BigObjectSerializer. This is still an early work in progress, with the end goal of matching NewtonSoft's serialization speed. 
+This library attempts to provide a serializer that can handle very large objects efficiently. This includes objects that take up well over 1GB+ in memory. As of now the NewtonSoft JSON.NET serializer typically performs 25% faster while having a file size of roughly double compared to BigObjectSerializer. This is still an early work in progress, with the end goal of matching NewtonSoft's serialization speed. 
 
 ## Comparisons
 
@@ -8,7 +8,7 @@ NewtonSoft's JSON.NET serialization is used as the benchmark because it is the f
 
 ## Implementation
 
-BigObjectSerializer is implemented as a stack. This allows us to make assumptions about how the values are stored.
+BigObjectSerializer is implemented as a queue (FIFO). This allows us to make assumptions about how the values are stored.
 
 ## Examples
 
@@ -28,7 +28,7 @@ Deserialization:
 using (var stream = File.Open("test.bin", FileMode.Open))
 using (var deserializer = new BigObjectDeserializer(stream))
 {
-    deserializedBenchmarkPoco = deserializer.PopObject<MyClass>();
+    var myObject = deserializer.PopObject<MyClass>();
 }
 ```
 
@@ -63,7 +63,7 @@ using (var deserializer = new BigObjectDeserializer(stream))
 
 ## Supported types
 
-The following are types supported in addition to the reflection-based object serializer.
+The following are types supported in addition to the reflection-based object serializer, which supports serialization of a class instance's properties that have getter/setters.
 
 * int
 * uint
@@ -90,4 +90,4 @@ In the future more types will be added. Additionally, all types can be pushed an
 ## TODO
 
 * Unit tests. I am sure there are many bugs and edge cases to cover (I believe one is Dictionaries with null value entries) that need to be tested.
-* As of now only 255 properties per class object are supported. Probably should update from using a byte to and short to increase this to a 65k property limit with minimal performance impact.
+* As of now only 255 properties per class object are supported. Probably should update from using a byte to a ushort to increase this to a 65k property limit with minimal performance impact.
