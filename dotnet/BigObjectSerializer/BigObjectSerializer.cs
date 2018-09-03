@@ -23,9 +23,8 @@ namespace BigObjectSerializer
         private ulong[] _ulongBuffer = new[] { 0UL };
 
         // Reflection
-        private readonly IDictionary<Type, IImmutableList<PropertyInfo>> _propertiesByType = new Dictionary<Type, IImmutableList<PropertyInfo>>();
+        private readonly IDictionary<Type, PropertyInfo[]> _propertiesByType = new Dictionary<Type, PropertyInfo[]>();
         private static readonly IImmutableDictionary<Type, Action<BigObjectSerializer, object>> _basicTypePushMethods;
-        private static readonly IImmutableSet<Type> _pushValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
         // Describes the mapping of string to int for each property name. Is serialized in the first instance of a type that doesn't already have a serialized mapping.
         private readonly IDictionary<Type, IImmutableDictionary<string, byte>> _propertyToIntMapping = new Dictionary<Type, IImmutableDictionary<string, byte>>(); // NOTE: Byte only allows up to 255 properties. Benchmark with short also
         private readonly IDictionary<Type, TypeAccessor> _getters = new Dictionary<Type, TypeAccessor>();
@@ -50,13 +49,6 @@ namespace BigObjectSerializer
                 [typeof(Guid)] = (instance, val) => instance.PushGuid((Guid)val),
             };
             _basicTypePushMethods = pushMethods.ToImmutableDictionary();
-
-            var pushValueTypes = pushMethods.Select(kv => kv.Key).ToList();
-            pushValueTypes.Add(typeof(ISet<>));
-            pushValueTypes.Add(typeof(IDictionary<,>));
-            pushValueTypes.Add(typeof(IList<>));
-            pushValueTypes.Add(typeof(IEnumerable<>));
-            _pushValueTypes = pushValueTypes.ToImmutableHashSet();
         }
         
         public BigObjectSerializer(Stream outputStream)
@@ -159,10 +151,12 @@ namespace BigObjectSerializer
             }
 
             var getters = GetTypeAccessor(type);
-            foreach (var property in GetPropertiesToGet(type)) // For now we only consider properties with getter/setter
+            var properties = GetPropertiesToGet(type);
+            //foreach (var property in GetPropertiesToGet(type)) // For now we only consider properties with getter/setter
+            for (var i = 0; i < properties.Length; ++i)
             {
-                var propertyType = property.PropertyType;
-                var name = property.Name;
+                var propertyType = properties[i].PropertyType;
+                var name = properties[i].Name;
                 var propertyValue = getters[value, name];
                 
                 PushByte(propertyNameMappings[name]);
@@ -191,7 +185,7 @@ namespace BigObjectSerializer
             return getter;
         }
         
-        private IImmutableList<PropertyInfo> GetPropertiesToGet(Type type)
+        private PropertyInfo[] GetPropertiesToGet(Type type)
         {
             if (!_propertiesByType.TryGetValue(type, out var properties))
             {
@@ -199,7 +193,7 @@ namespace BigObjectSerializer
                     _propertiesByType[type] = type
                     .GetProperties(BindingFlags.Public | BindingFlags.Instance)
                     .Where(p => p.CanRead && p.CanWrite)
-                    .ToImmutableList();
+                    .ToArray();
             }
             return properties;
         }
