@@ -1,6 +1,6 @@
 # BigObjectSerializer
 
-This library attempts to provide a serializer that can handle very large objects efficiently. This includes objects that take up well over 1GB+ in memory. As of now the NewtonSoft JSON.NET serializer typically performs 25% faster while having a file size of roughly double compared to BigObjectSerializer. This is still an early work in progress, with the end goal of matching NewtonSoft's serialization speed. 
+This library attempts to provide a serializer that can handle very large objects efficiently. This includes objects that take up well over 1GB+ in memory. As of now the NewtonSoft JSON.NET serializer typically performs at the same serialization speed while having a file size of roughly double compared to BigObjectSerializer. This is still an early work in progress, with the end goal of exceeding NewtonSoft's serialization speed. 
 
 ## Comparisons
 
@@ -91,3 +91,4 @@ In the future more types will be added. Additionally, all types can be pushed an
 
 * Unit tests. I am sure there are many bugs and edge cases to cover (I believe one is Dictionaries with null value entries) that need to be tested.
 * As of now only 255 properties per class object are supported. Probably should update from using a byte to a ushort to increase this to a 65k property limit with minimal performance impact.
+* Add proper benchmarking results.
