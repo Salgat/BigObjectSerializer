@@ -152,8 +152,7 @@ namespace BigObjectSerializer
 
             var getters = GetTypeAccessor(type);
             var properties = GetPropertiesToGet(type);
-            //foreach (var property in GetPropertiesToGet(type)) // For now we only consider properties with getter/setter
-            for (var i = 0; i < properties.Length; ++i)
+            for (var i = 0; i < properties.Length; ++i) // For now we only consider properties with getter/setter
             {
                 var propertyType = properties[i].PropertyType;
                 var name = properties[i].Name;
@@ -224,7 +223,6 @@ namespace BigObjectSerializer
                 var enumerable = ((IEnumerable)value).OfType<object>().ToArray();
 
                 PushInt(enumerable.Length); // Store the length of the enumerable
-                //foreach (var entry in enumerable)
                 for (var i = 0; i < enumerable.Length; ++i)
                 {
                     PushValue(enumerable[i], genericType, depth + 1, maxDepth);
@@ -286,9 +284,9 @@ namespace BigObjectSerializer
                 var newMapping = new Dictionary<string, byte>();
                 byte counter = 1; // 0 == end of object
                 var properties = GetPropertiesToGet(type);
-                foreach (var property in properties)
+                for (var i = 0; i < properties.Length; ++i)
                 {
-                    newMapping[property.Name] = counter++;
+                    newMapping[properties[i].Name] = counter++;
                 }
                 _propertyToIntMapping[type] = newMapping.ToImmutableDictionary();
 

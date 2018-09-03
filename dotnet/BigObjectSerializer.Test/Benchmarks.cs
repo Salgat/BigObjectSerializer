@@ -26,7 +26,7 @@ namespace BigObjectSerializer.Test
                 var theorySet = new TheoryData<int, bool>();
                 var sampleCounts = new List<int>()
                 {
-                    1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000 //1000000, 5000000, 15000000
+                    1, 10, 100, 1000, 10000, 100000, 1000000, 10000000
                 };
                 foreach (var sampleCount in sampleCounts)
                 {

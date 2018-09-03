@@ -20,8 +20,7 @@ namespace BigObjectSerializer
             var dictionary = new Dictionary<TValue, TKey>();
             foreach (var entry in source)
             {
-                //if (!dictionary.ContainsKey(entry.Value)) We can assume this is always true
-                    dictionary.Add(entry.Value, entry.Key);
+                dictionary.Add(entry.Value, entry.Key);
             }
             return dictionary;
         }
@@ -34,9 +33,9 @@ namespace BigObjectSerializer
             // Source: https://stackoverflow.com/questions/74616/how-to-detect-if-type-is-another-generic-type/1075059#1075059
             var interfaceTypes = givenType.GetInterfaces();
 
-            foreach (var it in interfaceTypes)
+            for (var i = 0; i < interfaceTypes.Length; ++i)
             {
-                if (it.IsGenericType && it.GetGenericTypeDefinition() == genericType)
+                if (interfaceTypes[i].IsGenericType && interfaceTypes[i].GetGenericTypeDefinition() == genericType)
                     return true;
             }
 
