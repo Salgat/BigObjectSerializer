@@ -1,4 +1,5 @@
-﻿using System;
+﻿using FastMember;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -28,11 +29,11 @@ namespace BigObjectSerializer
         private ulong[] _ulongBuffer = new[] { 0UL };
 
         // Reflection
-        private readonly IDictionary<Type, IImmutableDictionary<string, PropertyInfo>> _propertiesByType = new Dictionary<Type, IImmutableDictionary<string, PropertyInfo>>();
+        private readonly IDictionary<Type, IImmutableDictionary<string, (MemberInfo, Type)>> _propertiesByType = new Dictionary<Type, IImmutableDictionary<string, (MemberInfo, Type)>>();
         private readonly IImmutableDictionary<Type, Func<object>> _basicTypePopMethods; // Types that directly map to basic Pop Methods (such as PopInt)
-        private static readonly IImmutableDictionary<Type, PropertyInfo> _basicTypeGenericTaskResult; // Types that directly map to basic Pop Methods (such as PopInt)
         private readonly IImmutableSet<Type> _popValueTypes; // Types that directly map to supported PopValue methods (basic types and collections)
         private readonly IDictionary<Type, ConstructorInfo> _keyValueConstructors = new Dictionary<Type, ConstructorInfo>();
+        private readonly IDictionary<Type, TypeAccessor> _setters = new Dictionary<Type, TypeAccessor>();
         private readonly IDictionary<Type, Type[]> _genericArguments = new Dictionary<Type, Type[]>();
         private readonly IDictionary<Type, Type> _makeGenericTypeDictionary = new Dictionary<Type, Type>();
         private readonly IDictionary<Type, Type> _makeGenericTypeHashset = new Dictionary<Type, Type>();
@@ -253,6 +254,7 @@ namespace BigObjectSerializer
             var mapping = GetPropertyToIntMapping(type);
 
             // Create and populate object
+            var getters = GetTypeAccessor(type);
             var result = Activator.CreateInstance(type);
             var propertiesToSet = GetPropertiesToSet(type); // For now we only consider properties with getter/setter
             while (true)
@@ -275,7 +277,7 @@ namespace BigObjectSerializer
                 if (!propertyHasValue) continue; // Ignore null values
                 
                 var propertyValue = PopValue(propertyType, depth + 1, maxDepth);
-                matchingProperty.SetValue(result, propertyValue);
+                getters[result, propertyName] = propertyValue;
             }
 
             return result;
@@ -291,14 +293,18 @@ namespace BigObjectSerializer
             return intMapping;
         }
 
-        private IImmutableDictionary<string, PropertyInfo> GetPropertiesToSet(Type type)
+        private IImmutableDictionary<string, (MemberInfo MemberInfo, Type PropertyType)> GetPropertiesToSet(Type type)
         {
             if (!_propertiesByType.TryGetValue(type, out var properties))
             {
                 return _propertiesByType[type] = type
                     .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                    .Where(p => p.CanRead && p.CanWrite)
-                    .ToImmutableDictionary(item => item.Name, item => item);
+                    //.Where(p => p.CanRead && p.CanWrite)
+                    .Select(p => ((MemberInfo)p, p.PropertyType))
+                    .Concat(type
+                        .GetFields()
+                        .Select(f => ((MemberInfo)f, f.FieldType)))
+                    .ToImmutableDictionary(item => item.Item1.Name, item => item);
             }
             return properties;
         }
@@ -362,14 +368,19 @@ namespace BigObjectSerializer
                     throw new NotImplementedException($"{nameof(PopObject)} does not support deserializing type of {type.FullName}");
                 }
             }
-            else if (type.IsClass) // TODO: Handle structs
+            else
             {
                 return PopObject(type, depth + 1, maxDepth);
             }
-            else
+        }
+
+        private TypeAccessor GetTypeAccessor(Type type)
+        {
+            if (!_setters.TryGetValue(type, out var setter))
             {
-                throw new NotImplementedException($"{nameof(PopObject)} does not support deserializing type of {type.FullName}");
+                setter = _setters[type] = TypeAccessor.Create(type);
             }
+            return setter;
         }
 
         private bool IsKeyValuePair(Type type)

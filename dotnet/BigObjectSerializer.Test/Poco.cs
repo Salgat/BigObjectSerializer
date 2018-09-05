@@ -9,6 +9,7 @@ namespace BigObjectSerializer.Test
         public IEnumerable<string> StringEnumerableValues { get; set; }
         public int IntValue { get; set; }
         public IDictionary<Guid, double> GuidDoubleDictionaryValues { get; set; }
+        public long LongValue;
         public IList<PocoLevel2> PocoLevel2Values { get; set; }
         public string StringValue { get; set; }
     }
@@ -25,6 +26,12 @@ namespace BigObjectSerializer.Test
     {
         public double DoubleValue { get; set; }
         public byte[] ByteValues { get; set; }
+        public PocoLevel4 PocoLevel4Value { get; set; }
+    }
+
+    public struct PocoLevel4
+    {
+        public float FloatValue { get; set; }
     }
 
     public class BenchmarkPoco

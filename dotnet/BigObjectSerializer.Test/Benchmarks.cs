@@ -315,6 +315,7 @@ namespace BigObjectSerializer.Test
                     [Guid.NewGuid()] = 4532.123d,
                     [Guid.NewGuid()] = 821639.12942d
                 },
+                LongValue = 1234567890123456789L,
                 PocoLevel2Values = Enumerable.Range(0, 100).Select(i => new PocoLevel2()
                 {
                     StringValue = $"{i}_{i * 100}",
@@ -323,7 +324,11 @@ namespace BigObjectSerializer.Test
                     PocoLevel3Value = new PocoLevel3()
                     {
                         DoubleValue = 5932.23d,
-                        ByteValues = Enumerable.Range(0, 10).Select(i3 => (byte)i3).ToArray()
+                        ByteValues = Enumerable.Range(0, 10).Select(i3 => (byte)i3).ToArray(),
+                        PocoLevel4Value = new PocoLevel4()
+                        {
+                            FloatValue = 1234.56789f
+                        }
                     }
                 }).ToList(),
                 StringValue = "testValue"
@@ -345,6 +350,7 @@ namespace BigObjectSerializer.Test
 
                 Assert.True(poco.StringEnumerableValues.SequenceEqual(deserializedBasicPoco.StringEnumerableValues));
                 Assert.Equal(poco.IntValue, deserializedBasicPoco.IntValue);
+                Assert.Equal(poco.LongValue, deserializedBasicPoco.LongValue);
                 Assert.Equal(poco.GuidDoubleDictionaryValues.Count, deserializedBasicPoco.GuidDoubleDictionaryValues.Count);
                 Assert.True(poco.GuidDoubleDictionaryValues.All(kv => 
                     deserializedBasicPoco.GuidDoubleDictionaryValues.ContainsKey(kv.Key) && 
@@ -357,6 +363,7 @@ namespace BigObjectSerializer.Test
                         deserializedBasicPoco.PocoLevel2Values[i].IntValues.OrderBy(e => e)));
                     Assert.Equal(poco.PocoLevel2Values[i].PocoLevel3Value.DoubleValue, deserializedBasicPoco.PocoLevel2Values[i].PocoLevel3Value.DoubleValue);
                     Assert.True(poco.PocoLevel2Values[i].PocoLevel3Value.ByteValues.SequenceEqual(deserializedBasicPoco.PocoLevel2Values[i].PocoLevel3Value.ByteValues));
+                    Assert.Equal(poco.PocoLevel2Values[i].PocoLevel3Value.PocoLevel4Value, deserializedBasicPoco.PocoLevel2Values[i].PocoLevel3Value.PocoLevel4Value);
                 }
             }
         }

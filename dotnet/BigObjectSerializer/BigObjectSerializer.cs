@@ -23,7 +23,7 @@ namespace BigObjectSerializer
         private ulong[] _ulongBuffer = new[] { 0UL };
 
         // Reflection
-        private readonly IDictionary<Type, PropertyInfo[]> _propertiesByType = new Dictionary<Type, PropertyInfo[]>();
+        private readonly IDictionary<Type, (MemberInfo, Type)[]> _propertiesByType = new Dictionary<Type, (MemberInfo, Type)[]>();
         private static readonly IImmutableDictionary<Type, Action<BigObjectSerializer, object>> _basicTypePushMethods;
         // Describes the mapping of string to int for each property name. Is serialized in the first instance of a type that doesn't already have a serialized mapping.
         private readonly IDictionary<Type, IImmutableDictionary<string, byte>> _propertyToIntMapping = new Dictionary<Type, IImmutableDictionary<string, byte>>(); // NOTE: Byte only allows up to 255 properties. Benchmark with short also
@@ -155,7 +155,7 @@ namespace BigObjectSerializer
             for (var i = 0; i < properties.Length; ++i) // For now we only consider properties with getter/setter
             {
                 var propertyType = properties[i].PropertyType;
-                var name = properties[i].Name;
+                var name = properties[i].MemberInfo.Name;
                 var propertyValue = getters[value, name];
                 
                 PushByte(propertyNameMappings[name]);
@@ -184,14 +184,18 @@ namespace BigObjectSerializer
             return getter;
         }
         
-        private PropertyInfo[] GetPropertiesToGet(Type type)
+        private (MemberInfo MemberInfo, Type PropertyType)[] GetPropertiesToGet(Type type)
         {
             if (!_propertiesByType.TryGetValue(type, out var properties))
             {
                 properties = _propertiesByType[type] =
                     _propertiesByType[type] = type
                     .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                    .Where(p => p.CanRead && p.CanWrite)
+                    //.Where(p => p.CanRead && p.CanWrite)
+                    .Select(p => ((MemberInfo)p, p.PropertyType))
+                    .Concat(type
+                        .GetFields()
+                        .Select(f => ((MemberInfo)f, f.FieldType)))
                     .ToArray();
             }
             return properties;
@@ -232,10 +236,6 @@ namespace BigObjectSerializer
             {
                 PushObject(value, type, depth + 1, maxDepth);
             }
-            /*else
-            {
-                throw new NotImplementedException($"{nameof(PushObject)} does not support serializing type of {type.FullName}");
-            }*/
         }
 
         private void PushKeyValuePair(object value, Type type, int depth, int maxDepth)
@@ -286,7 +286,7 @@ namespace BigObjectSerializer
                 var properties = GetPropertiesToGet(type);
                 for (var i = 0; i < properties.Length; ++i)
                 {
-                    newMapping[properties[i].Name] = counter++;
+                    newMapping[properties[i].MemberInfo.Name] = counter++;
                 }
                 _propertyToIntMapping[type] = newMapping.ToImmutableDictionary();
 
